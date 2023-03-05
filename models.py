@@ -13,11 +13,6 @@ class CustomTransSmth(nn.Module):
         self.dim = dim
         self.w = nn.Parameter(torch.tensor(torch.zeros(self.dim, self.dim), requires_grad=True))
 
-    def forward(self, sample: dict):
-        h = sample['head']
-        r = sample['relation']
-        t = sample['tail']
-
-        score = (h@self.w + r) - t
-        score = self.gamma.item() - torch.norm(score, p=1, dim=2)
-        return score
+    def forward(self, h, t):
+        return h@self.w
+        

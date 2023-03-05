@@ -21,14 +21,29 @@ class Example:
     '''
     def __init__(self, guid, head, relation, tail):
         self.guid = guid
-        self.head = head
-        self.relation = relation
-        self.tail = tail
+        self.h = head
+        self.r = relation
+        self.t = tail
+
+    @property
+    def head(self):
+        return _parse_entity(self.h)
+    
+    @property
+    def relation(self):
+        return self.r
+    
+    @property
+    def tail(self):
+        return _parse_entity(self.t)
+    
 
 class Feature:
     '''Store Bert features'''
     def __init__(self, token_ids, segment_ids, attention_mask, token_indices=None):
         self.token_ids = token_ids
+        # self.hr_token_ids = hr_token_ids
+        # self.t_token_ids = t_token_ids
         self.segment_ids = segment_ids
         self.attention_mask = attention_mask
         self.token_indices: dict(tuple)= token_indices # [token_a, token_b, token_cc]
@@ -83,15 +98,6 @@ def convert_examples_to_features(examples: list[Example], tokenizer: BertTokeniz
         token_b_idx = (len(token_a), len(token_a) + len(token_b))
         token_c_idx = (len(token_a) + len(token_b), len(token_a) + len(token_b) + len(token_c))
 
-        # if i < 5:
-        #     logger.info("*** Example ***")
-        #     logger.info("guid: %s" % (example.guid))
-        #     logger.info("tokens: %s" % " ".join(
-        #             [str(x) for x in token_seq]))
-        #     logger.info("token_ids: %s" % " ".join([str(x) for x in token_ids]))
-        #     logger.info("attention_mask: %s" % " ".join([str(x) for x in attention_mask]))
-        #     logger.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
-
         features.append(Feature(
             token_ids=token_ids,
             segment_ids=segment_ids,
@@ -108,7 +114,11 @@ def convert_examples_to_features(examples: list[Example], tokenizer: BertTokeniz
     return features
 
 
-def _truncate_and_padding_embedding(batch: torch.tensor, max_len: int=7) -> torch.tensor:
+def _parse_entity(entity: str) -> str:
+    return entity.replace('_', ' ').strip()
+
+
+def _truncate_and_padding_embedding(batch: torch.tensor, max_len) -> torch.tensor:
     '''Truncate or add padding to each entity/relation embedding'''
     if batch.size()[1] > max_len:
         return batch[:,:max_len,:]
@@ -145,29 +155,53 @@ class BertEmbedder:
 
         logger.info('***Geting embedding***')
         last_hidden_states = self.model(all_token_ids)[0].cpu()  # Models outputs are now tuples
+        logger.info('last hidden states size: {}'.format(last_hidden_states.size()))
 
         embeddings = {
             'head': [],
             'relation': [],
             'tail': []
         }
-        
+        # for i in range(len(examples)):
+        #     head_emb = last_hidden_states[:,features[i].token_indices['head'][0]:features[i].token_indices['head'][1],:]
+        #     head_emb = _truncate_and_padding_embedding(head_emb, self.max_word_len)
+        #     embeddings['head'].append(head_emb)
+
+        #     relation_emb = last_hidden_states[:,features[i].token_indices['relation'][0]:features[i].token_indices['relation'][1],:]
+        #     relation_emb = _truncate_and_padding_embedding(relation_emb, self.max_word_len)
+        #     embeddings['relation'].append(relation_emb)
+
+        #     tail_emb = last_hidden_states[:,features[i].token_indices['tail'][0]:features[i].token_indices['tail'][1]:, ]
+        #     tail_emb = _truncate_and_padding_embedding(tail_emb, self.max_word_len)
+        #     embeddings['tail'].append(tail_emb)
+
         for i in range(len(examples)):
-            head_emb = last_hidden_states[:,features[i].token_indices['head'][0]:features[i].token_indices['head'][1],:]
-            head_emb = _truncate_and_padding_embedding(head_emb)
+            head_emb = torch.mean(
+                last_hidden_states[i,features[i].token_indices['head'][0]:features[i].token_indices['head'][1],:], dim=0)
+            
             embeddings['head'].append(head_emb)
 
-            relation_emb = last_hidden_states[:,features[i].token_indices['relation'][0]:features[i].token_indices['relation'][1],:]
-            relation_emb = _truncate_and_padding_embedding(relation_emb)
+            relation_emb = torch.mean(
+                last_hidden_states[i,features[i].token_indices['relation'][0]:features[i].token_indices['relation'][1],:], dim=0)
             embeddings['relation'].append(relation_emb)
 
-            tail_emb = last_hidden_states[:,features[i].token_indices['tail'][0]:features[i].token_indices['tail'][1]:, ]
-            tail_emb = _truncate_and_padding_embedding(tail_emb)
+            tail_emb = torch.mean(
+                last_hidden_states[i,features[i].token_indices['tail'][0]:features[i].token_indices['tail'][1]:, ], dim=0)
             embeddings['tail'].append(tail_emb)
+
+            # logger.info('Embedding size head: {}'.format(head_emb.size()))
+            # logger.info('Embedding size relation: {}'.format(relation_emb.size()))
+            # logger.info('Embedding size tail: {}'.format(tail_emb.size()))
+
+
 
         embeddings['head'] = torch.stack(embeddings['head']).cuda()
         embeddings['relation'] = torch.stack(embeddings['relation']).cuda()
         embeddings['tail'] = torch.stack(embeddings['tail']).cuda()
+
+        # logger.info('Embedding size head: {}'.format(embeddings['head'].size()))
+        # logger.info('Embedding size relation: {}'.format(embeddings['relation'].size()))
+        # logger.info('Embedding size tail: {}'.format(embeddings['tail'].size()))
 
         return embeddings
 
@@ -192,7 +226,7 @@ def load_data(path, task, inverse=False):
             examples.append(Example(
                 guid=f'{task}-{i}-inv',
                 head=data[i]['tail'],
-                relation=data[i]['relation'] + '_inverse',
+                relation=data[i]['relation'] + ' inverse',
                 tail=data[i]['head']  
             ))
         data[i] = None

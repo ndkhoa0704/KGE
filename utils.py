@@ -46,7 +46,7 @@ def load_model(epoch, model, optimizer):
 def delete_old_ckt(path_pattern: str, keep=5):
     files = sorted(glob.glob(path_pattern), key=os.path.getmtime, reverse=True)
     for f in files[keep:]:
-        logger.info('Delete old checkpoint {}'.format(f))
+        logger.info('Delete old checkpoint {}'.format(f)) 
         os.system('rm -f {}'.format(f))
 
 
