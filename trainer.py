@@ -34,7 +34,7 @@ class Trainer:
         )
 
 
-    def test_step(self, args):
+    def test_step(self):
         '''
         Evaluate the model on test or valid datasets
         '''
@@ -50,10 +50,10 @@ class Trainer:
 
         with torch.no_grad():
             for batch in self.test_data_loader:
-                if args.cuda:
+                if self.args.use_cuda and torch.cuda.is_available():
                     batch = move_to_cuda(batch)
 
-                batch_size = batch.size(0)
+                batch_size = batch['head'].size(0)
 
                 tail = self.model(batch['head'], batch['relation'])
                 score = self.score_fn(tail, batch['tail'])
@@ -84,7 +84,7 @@ class Trainer:
                         'HITS@10': 1.0 if ranking <= 10 else 0.0,
                     })
 
-                if step % args.test_log_steps == 0:
+                if step % self.args.test_log_steps == 0:
                     logger.info('Evaluating the model... (%d/%d)' % (step, total_steps))
 
                 step += 1
@@ -96,7 +96,9 @@ class Trainer:
         return metrics
 
     def score_fn(self, true_tail, pred_tail):
-        return F.logsigmoid(pred_tail - true_tail).squeeze(dim = 0)
+        score = pred_tail - true_tail
+        # score = torch.norm(score, p=1, dim=1)
+        return F.logsigmoid(score).squeeze(dim = 0)
 
 
     def train_epoch(self, epoch):
@@ -124,7 +126,7 @@ class Trainer:
             self.train_epoch(i)
             save_model(i, self.model, self.optimizer)
 
-        self.test_step()
+        # self.test_step()
 
 
     def _setup_training(self):

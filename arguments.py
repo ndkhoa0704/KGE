@@ -9,5 +9,6 @@ parser.add_argument('--gamma', dest='gamma', default=0.5)
 parser.add_argument('--no-epoch', dest='no_epoch', default=10, type=int)
 parser.add_argument('--learning-rate', dest='lr', default=0.05, type=float)
 parser.add_argument('--use-cuda', dest='use_cuda', default=True)
-
+parser.add_argument('--test-log-steps', dest='test_log_steps', default=10, type=int)
+    
 args = parser.parse_args()
