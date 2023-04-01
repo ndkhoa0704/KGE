@@ -4,14 +4,18 @@ import json
 import os
 from logger_config import logger
 import torch
+from copy import deepcopy
+from utils import move_to_cuda
+from arguments import args
+
 
 
 BERT_EMBEDDER = None
 
-def get_bert_embedder(*args, **kwargs):
+def get_bert_embedder():
     global BERT_EMBEDDER
     if BERT_EMBEDDER is None:
-        BERT_EMBEDDER = BertEmbedder(*args, **kwargs)
+        BERT_EMBEDDER = BertEmbedder(args=args)
     return BERT_EMBEDDER
 
 
@@ -36,17 +40,6 @@ class Example:
     @property
     def tail(self):
         return _parse_entity(self.t)
-    
-
-class Feature:
-    '''Store Bert features'''
-    def __init__(self, token_ids, segment_ids, attention_mask, token_indices=None):
-        self.token_ids = token_ids
-        # self.hr_token_ids = hr_token_ids
-        # self.t_token_ids = t_token_ids
-        self.segment_ids = segment_ids
-        self.attention_mask = attention_mask
-        self.token_indices: dict(tuple)= token_indices # [token_a, token_b, token_cc]
 
 
 def _truncate_seq_triple(tokens_a, tokens_b, tokens_c, max_length):
@@ -69,8 +62,26 @@ def _truncate_seq_triple(tokens_a, tokens_b, tokens_c, max_length):
             tokens_c.pop()
 
 
-def convert_examples_to_features(examples: list[Example], tokenizer: BertTokenizerFast, max_seq_len=20) -> list[Example]:
-    '''Covert Example to '''
+def _truncate_and_padding_embedding(word: list, max_len) -> torch.tensor:
+    '''Truncate or add padding to each entity/relation embedding'''
+    if len(word) > max_len:
+        return word[:max_len]
+    elif len(word) < max_len:
+        return word + ['[PAD]'] * (max_len - len(word))
+    return word
+
+
+def convert_examples_to_features(
+        examples, 
+        tokenizer: BertTokenizerFast, 
+        max_word_len=7
+):
+    '''
+    Covert text triplets to tokenized features
+    
+    :return: tokenized features (hr, t) (h, rt)
+    :rtype tuple
+    '''
     features = []
     for i, example in enumerate(examples):
         if i % 10000 == 0:
@@ -79,35 +90,21 @@ def convert_examples_to_features(examples: list[Example], tokenizer: BertTokeniz
         token_b = tokenizer.tokenize(example.relation)
         token_c = tokenizer.tokenize(example.tail)
 
-        _truncate_seq_triple(token_a, token_b, token_c, max_length=max_seq_len - 1)
+        token_a = _truncate_and_padding_embedding(token_a, max_len=max_word_len)
+        token_b = _truncate_and_padding_embedding(token_b, max_len=max_word_len)
+        token_c = _truncate_and_padding_embedding(token_c, max_len=max_word_len)
 
-        token_seq = token_a + token_b + token_c + ['[SEP]']
+        triple = token_a + token_b + token_c
 
-        token_ids = tokenizer.convert_tokens_to_ids(token_seq)
-        attention_mask = [1] * len(token_seq)
-        segment_ids = [1] * len(token_seq)
+        tokens = tokenizer.convert_tokens_to_ids(triple)
 
-        padding_length = max_seq_len - len(token_ids)
-
-        token_ids += [0] * padding_length
-        attention_mask += [0] * padding_length
-        segment_ids += [0] * padding_length
-
-
-        token_a_idx = (0, len(token_a))
-        token_b_idx = (len(token_a), len(token_a) + len(token_b))
-        token_c_idx = (len(token_a) + len(token_b), len(token_a) + len(token_b) + len(token_c))
-
-        features.append(Feature(
-            token_ids=token_ids,
-            segment_ids=segment_ids,
-            attention_mask=attention_mask,
-            token_indices={
-                'head': token_a_idx, 
-                'relation': token_b_idx, 
-                'tail': token_c_idx
-            }
-        ))
+        features.append({
+            'h_token_id': tokens[:max_word_len],
+            'r_token_id': tokens[max_word_len:2*max_word_len],
+            't_token_id': tokens[2*max_word_len:],
+            'hr_token_id': tokens[:2*max_word_len],
+            'rt_token_id': tokens[max_word_len:],
+        })
 
         examples[i] = None
 
@@ -118,90 +115,80 @@ def _parse_entity(entity: str) -> str:
     return entity.replace('_', ' ').strip()
 
 
-def _truncate_and_padding_embedding(batch: torch.tensor, max_len) -> torch.tensor:
-    '''Truncate or add padding to each entity/relation embedding'''
-    if batch.size()[1] > max_len:
-        return batch[:,:max_len,:]
-    elif batch.size()[1] < max_len:
-        return torch.cat((batch, torch.zeros(batch.size()[0], max_len - batch.size()[1], batch.size(2))), dim=1)
-    
-    return batch
-
-
 class BertEmbedder:
     def __init__(self,
+                 args,
                  pretrained_weights='bert-base-uncased',
                  tokenizer_class=BertTokenizerFast,
                  model_class=BertModel,
                  max_seq_len=20,
+                 mode='forward',
                  max_word_len=7):
         super().__init__()
+        self.args = args
         self.pretrained_weights = pretrained_weights
         self.tokenizer_class = tokenizer_class
         self.model_class = model_class
         self.tokenizer = self.tokenizer_class.from_pretrained(pretrained_weights)
-        self.model = self.model_class.from_pretrained(pretrained_weights).cuda()
+        self.hr_model = self.model_class.from_pretrained(pretrained_weights).cuda()
+        self.t_model = deepcopy(self.hr_model)
         self.max_seq_len = max_seq_len
         self.max_word_len = max_word_len
+        self.mode = mode
         # tokenizer = BertTokenizer.from_pretrained(pretrained_weights)
         # model = BertModel.from_pretrained(pretrained_weights)
 
-    def get_bert_embeddings(self, examples: list[Example]) -> dict:
-        features = convert_examples_to_features(examples, self.tokenizer)
 
-        all_token_ids = torch.tensor([f.token_ids for f in features], dtype=torch.long).cuda()
-        all_attention_mask = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
-        all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
+    def get_bert_embeddings(self, examples) -> dict:
+        features = convert_examples_to_features(examples, self.tokenizer)
+        
+        if self.mode == 'forward':
+            hr_token_ids = torch.tensor([f['hr_token_id'] for f in features], dtype=torch.long)
+            t_token_ids = torch.tensor([f['t_token_id'] for f in features], dtype=torch.long)
+        if self.mode == 'backward':
+            hr_token_ids = torch.tensor([f['rt_token_id'] for f in features], dtype=torch.long)
+            t_token_ids = torch.tensor([f['t_token_id'] for f in features], dtype=torch.long)
+
+
+        # all_token_ids = torch.tensor([f.token_ids for f in features], dtype=torch.long)
+        # all_attention_mask = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
+        # all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
+
+        if self.args.use_cuda:
+            hr_token_ids = move_to_cuda(hr_token_ids)
+            t_token_ids = move_to_cuda(t_token_ids)
 
         logger.info('***Geting embedding***')
-        last_hidden_states = self.model(all_token_ids)[0].cpu()  # Models outputs are now tuples
-        logger.info('last hidden states size: {}'.format(last_hidden_states.size()))
+        # last_hidden_states = self.model(all_token_ids, all_attention_mask)[0].cpu()  # Models outputs are now tuples
+        # if self.mode == 'forward': 
+        #     hr_last_hidden_states = self.hr_model(hr_token_ids)[0]  # Models outputs are now tuples
+        #     t_last_hidden_states = self.t_model(t_token_ids)[0]  # Models outputs are now tuples
 
+        hr_last_hidden_states = self.hr_model(hr_token_ids)[0]  # Models outputs are now tuples
+        t_last_hidden_states = self.t_model(t_token_ids)[0]
+        h_emb = []
+        r_emb = []
+        t_emb = []
+
+        for i in range(len(features)):
+  # Models outputs are now tuples
+            h_size = len(features[i]['h_token_id'])
+            r_size = len(features[i]['r_token_id'])
+            t_size = len(features[i]['t_token_id'])
+            h_emb.append(torch.mean(hr_last_hidden_states[0, :h_size, :], dim=0))
+            r_emb.append(torch.mean(hr_last_hidden_states[0, h_size:h_size+r_size, :], dim=0))
+            t_emb.append(torch.mean(t_last_hidden_states[0, :t_size, :], dim=0))
+        
+        
         embeddings = {
-            'head': [],
-            'relation': [],
-            'tail': []
+            'head': h_emb,
+            'relation': r_emb,
+            'tail': t_emb
         }
-        # for i in range(len(examples)):
-        #     head_emb = last_hidden_states[:,features[i].token_indices['head'][0]:features[i].token_indices['head'][1],:]
-        #     head_emb = _truncate_and_padding_embedding(head_emb, self.max_word_len)
-        #     embeddings['head'].append(head_emb)
-
-        #     relation_emb = last_hidden_states[:,features[i].token_indices['relation'][0]:features[i].token_indices['relation'][1],:]
-        #     relation_emb = _truncate_and_padding_embedding(relation_emb, self.max_word_len)
-        #     embeddings['relation'].append(relation_emb)
-
-        #     tail_emb = last_hidden_states[:,features[i].token_indices['tail'][0]:features[i].token_indices['tail'][1]:, ]
-        #     tail_emb = _truncate_and_padding_embedding(tail_emb, self.max_word_len)
-        #     embeddings['tail'].append(tail_emb)
-
-        for i in range(len(examples)):
-            head_emb = torch.mean(
-                last_hidden_states[i,features[i].token_indices['head'][0]:features[i].token_indices['head'][1],:], dim=0)
-            
-            embeddings['head'].append(head_emb)
-
-            relation_emb = torch.mean(
-                last_hidden_states[i,features[i].token_indices['relation'][0]:features[i].token_indices['relation'][1],:], dim=0)
-            embeddings['relation'].append(relation_emb)
-
-            tail_emb = torch.mean(
-                last_hidden_states[i,features[i].token_indices['tail'][0]:features[i].token_indices['tail'][1]:, ], dim=0)
-            embeddings['tail'].append(tail_emb)
-
-            # logger.info('Embedding size head: {}'.format(head_emb.size()))
-            # logger.info('Embedding size relation: {}'.format(relation_emb.size()))
-            # logger.info('Embedding size tail: {}'.format(tail_emb.size()))
-
-
 
         embeddings['head'] = torch.stack(embeddings['head']).cuda()
         embeddings['relation'] = torch.stack(embeddings['relation']).cuda()
         embeddings['tail'] = torch.stack(embeddings['tail']).cuda()
-
-        # logger.info('Embedding size head: {}'.format(embeddings['head'].size()))
-        # logger.info('Embedding size relation: {}'.format(embeddings['relation'].size()))
-        # logger.info('Embedding size tail: {}'.format(embeddings['tail'].size()))
 
         return embeddings
 
@@ -234,7 +221,7 @@ def load_data(path, task, inverse=False):
     return examples
 
 
-def collate(batch_data: list[Example]) -> list:
+def collate(batch_data) -> list:
     embedder = get_bert_embedder()
     return embedder.get_bert_embeddings(batch_data)
 
