@@ -1,5 +1,5 @@
 from transformers import BertModel, BertTokenizer
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import json
 import os
 from logger_config import logger
@@ -7,16 +7,7 @@ import torch
 from copy import deepcopy
 from utils import move_to_cuda
 from arguments import args
-
-
-
-BERT_EMBEDDER = None
-
-def get_bert_embedder(use_cuda, mode):
-    global BERT_EMBEDDER
-    if BERT_EMBEDDER is None:
-        BERT_EMBEDDER = BertEmbedder(use_cuda=use_cuda, mode=mode)
-    return BERT_EMBEDDER
+from functools import partial
 
 
 class Example:
@@ -130,7 +121,6 @@ class BertEmbedder:
         self.pretrained_weights = pretrained_weights
         self.tokenizer_class = tokenizer_class
         self.model_class = model_class
-        print(self.tokenizer_class)
         self.tokenizer = self.tokenizer_class.from_pretrained(pretrained_weights)
         self.hr_model = self.model_class.from_pretrained(pretrained_weights).cuda()
         self.t_model = deepcopy(self.hr_model)
@@ -150,7 +140,7 @@ class BertEmbedder:
             t_token_ids = torch.tensor([f['t_token_id'] for f in features], dtype=torch.long)
         elif self.mode == 'backward':
             hr_token_ids = torch.tensor([f['rt_token_id'] for f in features], dtype=torch.long)
-            t_token_ids = torch.tensor([f['t_token_id'] for f in features], dtype=torch.long)
+            t_token_ids = torch.tensor([f['h_token_id'] for f in features], dtype=torch.long)
         elif self.mode == 'all':
             hr_token_ids = torch.cat(
                 (torch.tensor([f['hr_token_id'] for f in features], dtype=torch.long),
@@ -159,7 +149,7 @@ class BertEmbedder:
             )
             t_token_ids = torch.cat(
                 (torch.tensor([f['t_token_id'] for f in features], dtype=torch.long),
-                torch.tensor([f['t_token_id'] for f in features], dtype=torch.long)),
+                torch.tensor([f['h_token_id'] for f in features], dtype=torch.long)),
                 dim=0
             )
 
@@ -237,11 +227,16 @@ def load_data(path, task, inverse=False):
 
 
 def collate(batch_data, mode) -> list:
-    embedder = get_bert_embedder(mode=mode, use_cuda=args.use_cuda)
+    embedder = BertEmbedder(mode=mode, use_cuda=args.use_cuda)
     return embedder.get_bert_embeddings(batch_data)
 
 
-class DataSet(Dataset):
+def embed_entities(batch_entities, mode) -> list:
+    embedder = BertEmbedder(mode=mode, use_cuda=args.use_cuda)
+    return embedder.get_bert_embeddings(batch_entities)
+    
+
+class TrainDataSet(Dataset):
     def __init__(self, path, task, *args, **kwargs):
         self.examples = load_data(path, task, *args, **kwargs)
         self.data_len = len(self.examples)
@@ -253,3 +248,32 @@ class DataSet(Dataset):
         return self.examples[index]
     
 
+class TestDataSet(Dataset):
+    def __init__(self, train_path, test_path, valid_path, task, *args, **kwargs):
+        self.examples = list(set(load_data(train_path, task, *args, **kwargs) \
+            + load_data(test_path, task, *args, **kwargs) \
+            + load_data(valid_path, task, *args, **kwargs)))
+    
+    def __len__(self):
+        return self.data_len
+    
+    def __getitem__(self, index):
+        return self.examples[index]
+    
+
+def get_entities_emb(data_set: TestDataSet):
+    data_loader_ = DataLoader(
+        dataset=data_set,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=0,
+        collate_fn=partial(collate, mode='all')
+    )
+
+    embs = []
+    for batch in data_loader_:
+        batch['tail'] = batch['tail'].cpu()
+        embs.append(batch['tail'])
+    
+    embs = torch.stack(embs, dim=0)
+    return embs

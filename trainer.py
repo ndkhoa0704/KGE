@@ -1,9 +1,11 @@
 import torch
 from torch.utils.data import DataLoader
-from data_loader import DataSet, collate
+from data_loader import TrainDataSet, TestDataSet, collate, get_entities_emb
 from utils import move_to_cuda, save_model
 import torch.nn.functional as F
 from logger_config import logger
+from dissimilarities import l1_dissimilarity, l2_dissimilarity
+from functools import partial
 
 
 class Trainer:
@@ -13,13 +15,21 @@ class Trainer:
         self.model = model(self.args.gamma, 768)
         logger.info(self.model)
         self._setup_training()
-        self.train_dataset = DataSet(self.args.train_path, 'train')
-        self.test_dataset = DataSet(self.args.test_path, 'test')
+        self.train_dataset = TrainDataSet(self.args.train_path, 'train')
+        self.test_dataset = TestDataSet(
+            train_path=self.args.train_path,
+            test_path=self.args.test_path,
+            valid_path=self.args.valid_path,
+            task='test'
+        )
+
+        self.sim = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
         
         self.optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.model.parameters()), 
             lr=self.args.lr
         )
+        self.entitiies_embs = get_entities_emb(self.test_dataset)
 
 
     def test_step(self):
@@ -64,11 +74,12 @@ class Trainer:
                 batch_size = batch['head'].size(0)
 
                 tail = self.model(batch['head'], batch['relation'])
-                score = self.score_fn(tail, batch['tail'])
+                # argsort = torch.argsort(score, dim = 1, descending=True)
+
                 # score += filter_bias
 
                 #Explicitly sort all the entities to ensure that there is no test exposure bias
-                argsort = torch.argsort(score, dim = 1, descending=True)
+                # argsort = torch.argsort(score, dim = 1, descending=True)
 
                 # if mode == 'head-batch':
                 #     positive_arg = positive_sample[:, 0]
@@ -79,8 +90,11 @@ class Trainer:
 
                 for i in range(batch_size):
                     #Notice that argsort is not ranking
-                    ranking = (argsort[i, :] == batch[i]).nonzero()
-                    assert ranking.size(0) == 1
+                    score = self.score_fn(tail[i], self.entitiies_embs)
+                    argsort = self.entitiies_embs[torch.argsort(score, dim = 0, descending=False)]
+                    ranking = (argsort == batch['tail'][i]).nonzero()
+
+                    # assert ranking.size(0) == 1
 
                     #ranking + 1 is the true ranking used in evaluation metrics
                     ranking = 1 + ranking.item()
@@ -104,9 +118,9 @@ class Trainer:
         return metrics
 
     def score_fn(self, true_tail, pred_tail):
-        score = pred_tail - true_tail
         # score = torch.norm(score, p=1, dim=1)
-        return F.logsigmoid(score).squeeze(dim = 0)
+        # return F.logsigmoid(score).squeeze(dim = 0)
+        return l1_dissimilarity(pred_tail, true_tail)
 
 
     def train_epoch(self, epoch):
