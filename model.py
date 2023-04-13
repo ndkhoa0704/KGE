@@ -44,7 +44,7 @@ class KGEModel(nn.Module):
         self.entity_embedding = nn.Parameter(torch.zeros(nentity, self.entity_dim))
         nn.init.uniform_(
             tensor=self.entity_embedding, 
-            a=-self.embedding_range.item(), 
+            a=-self.embedding_range.item(),  
             b=self.embedding_range.item()
         )
         
@@ -83,7 +83,7 @@ class KGEModel(nn.Module):
             batch_size, negative_sample_size = sample.size(0), 1
             
             head = torch.index_select(
-                self.entity_embedding, 
+                self.entity_embedding,  
                 dim=0, 
                 index=sample[:,0]
             ).unsqueeze(1)
@@ -121,6 +121,11 @@ class KGEModel(nn.Module):
                 dim=0, 
                 index=tail_part[:, 2]
             ).unsqueeze(1)
+
+            print('head shape:', head.shape())
+            print('relation shape:', relation.shape())
+            print('tail shape:', tail.shape())
+            
             
         elif mode == 'tail-batch':
             head_part, tail_part = sample
@@ -159,7 +164,7 @@ class KGEModel(nn.Module):
             score = model_func[self.model_name](head, relation, tail, mode)
         else:
             raise ValueError('model %s not supported' % self.model_name)
-        
+        print('score shape:', score.shape)
         return score
     
     def TransE(self, head, relation, tail, mode):

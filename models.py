@@ -13,6 +13,10 @@ class CustomTransSmth(nn.Module):
         self.dim = dim
         self.w = nn.Parameter(torch.tensor(torch.zeros(self.dim, self.dim), requires_grad=True))
 
-    def forward(self, h, t):
-        return h@self.w
-        
+    def forward(self, h, r):
+        print('head shape', h.shape)
+        print('relation shape', r.shape)
+        t = h@self.w + r
+        print('tail shape', t.shape)
+
+        return 
