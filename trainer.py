@@ -15,18 +15,6 @@ class Trainer:
         self._setup_training()
         self.train_dataset = DataSet(self.args.train_path, 'train')
         self.test_dataset = DataSet(self.args.test_path, 'test')
-        self.train_data_loader = DataLoader(
-            self.train_dataset,
-            shuffle=True,
-            collate_fn=collate,
-            batch_size=args.batch_size
-        )
-        self.test_data_loader = DataLoader(
-            self.train_dataset,
-            shuffle=True,
-            collate_fn=collate,
-            batch_size=args.batch_size
-        )
         
         self.optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.model.parameters()), 
@@ -43,13 +31,33 @@ class Trainer:
             #Otherwise use standard (filtered) MRR, MR, HITS@1, HITS@3, and HITS@10 metrics
             #Prepare dataloader for evaluation
         
+        logs = []           
+        test_dataloader_head =  DataLoader(
+            self.test_dataset,
+            shuffle=True,
+            collate_fn=lambda batch: collate(batch, mode='forward'),
+            batch_size=self.args.batch_size
+        )
+
+        test_dataloader_tail =  DataLoader(
+            self.test_dataset,
+            shuffle=True,
+            collate_fn=lambda batch: collate(batch, mode='backward'),
+            batch_size=self.args.batch_size
+        )
+
+        test_dataset_list = [test_dataloader_head, test_dataloader_tail]
+        
         logs = []
+
+        step = 0
+        total_steps = sum([len(dataset) for dataset in test_dataset_list])
 
         step = 0
         total_steps = len(self.test_data_loader)
 
         with torch.no_grad():
-            for batch in self.test_data_loader:
+            for batch in self.test_data_loader: 
                 if self.args.use_cuda and torch.cuda.is_available():
                     batch = move_to_cuda(batch)
 
@@ -102,7 +110,13 @@ class Trainer:
 
 
     def train_epoch(self, epoch):
-        for batch in self.train_data_loader:
+        train_data_loader = DataLoader(
+            self.train_dataset,
+            shuffle=True,
+            collate_fn=lambda batch: collate(batch, mode='all'),
+            batch_size=self.args.batch_size
+        )
+        for batch in train_data_loader:
             # self.train_sampler.set_epoch(epoch)
             self.model.train()
             self.optimizer.zero_grad()

@@ -9,3 +9,9 @@ python3 -u preprocess.py \
 --valid-path "./data/${TASK}/valid.txt" \
 --test-path "./data/${TASK}/test.txt"
 ```
+
+
+- Execution
+```
+python main.py --train-path "./data/WN18RR/test.txt.json" --test-path "./data/WN18RR/valid.txt.json"  --batch-size 512 --no-epoch=10
+```
