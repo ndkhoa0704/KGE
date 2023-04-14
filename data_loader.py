@@ -152,7 +152,7 @@ class BertEmbedder:
         # model = BertModel.from_pretrained(pretrained_weights)
 
 
-    def get_bert_embeddings(self, examples, entity_only=False) -> dict:
+    def get_bert_embeddings(self, examples) -> dict:
 
         features = convert_examples_to_features(examples, self.tokenizer)
         
@@ -179,8 +179,7 @@ class BertEmbedder:
         # all_attention_mask = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
         # all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
         if self.use_cuda:
-            if not entity_only:
-                hr_token_ids = move_to_cuda(hr_token_ids)
+            hr_token_ids = move_to_cuda(hr_token_ids)
             t_token_ids = move_to_cuda(t_token_ids)
 
         logger.info('***Geting embedding***')
@@ -188,9 +187,10 @@ class BertEmbedder:
         # if self.mode == 'forward': 
         #     hr_last_hidden_states = self.hr_model(hr_token_ids)[0]  # Models outputs are now tuples
         #     t_last_hidden_states = self.t_model(t_token_ids)[0]  # Models outputs are now tuples
-        if not entity_only:
-            hr_last_hidden_states = self.hr_model(hr_token_ids)[0]  # Models outputs are now tuples
+        hr_last_hidden_states = self.hr_model(hr_token_ids)[0]  # Models outputs are now tuples
         t_last_hidden_states = self.t_model(t_token_ids)[0]
+
+        
 
         h_emb = []
         r_emb = []
@@ -201,12 +201,10 @@ class BertEmbedder:
             h_size = len(features[i]['h_token_id'])
             r_size = len(features[i]['r_token_id'])
             t_size = len(features[i]['t_token_id'])
-            if not entity_only:
-                h_emb.append(torch.mean(hr_last_hidden_states[0, :h_size, :], dim=0))
-                r_emb.append(torch.mean(hr_last_hidden_states[0, h_size:h_size+r_size, :], dim=0))
+            h_emb.append(torch.mean(hr_last_hidden_states[0, :h_size, :], dim=0))
+            r_emb.append(torch.mean(hr_last_hidden_states[0, h_size:h_size+r_size, :], dim=0))
             t_emb.append(torch.mean(t_last_hidden_states[0, :t_size, :], dim=0))
         
-        if not entity_only:
             embeddings = {
                 'head': h_emb,
                 'relation': r_emb,
@@ -216,8 +214,6 @@ class BertEmbedder:
             embeddings['head'] = torch.stack(embeddings['head']).cuda()
             embeddings['relation'] = torch.stack(embeddings['relation']).cuda()
             embeddings['tail'] = torch.stack(embeddings['tail']).cuda()
-        else:
-            embeddings = torch.stack(t_emb).cuda()
 
         # logger.info('batch size: {}'.format())
         return embeddings
@@ -293,10 +289,7 @@ def get_entities_emb(data_set: TestDataSet):
 
     embs = []
     for batch in data_loader_:
-        embs.append(batch.to("cpu"))
-        batch.detach()
-        torch.cuda.empty_cache()
-        gc.collect()
+        embs.append(batch)
     
     embs = torch.stack(embs, dim=0)
     return embs
