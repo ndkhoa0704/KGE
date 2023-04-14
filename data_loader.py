@@ -8,7 +8,24 @@ from copy import deepcopy
 from utils import move_to_cuda
 from arguments import args
 from functools import partial
+import gc
 
+BERT_EMBEDDER_ALL = None
+BERT_EMBEDDER_SINGLE = None
+
+
+def get_bert_embedder(use_cuda, mode):
+    global BERT_EMBEDDER_ALL
+    global BERT_EMBEDDER_SINGLE
+    if mode == 'all':
+        if BERT_EMBEDDER_ALL is None:
+            BERT_EMBEDDER_ALL = BertEmbedder(use_cuda=use_cuda, mode='all')
+            return BERT_EMBEDDER_ALL
+    elif mode in ['forward', 'backward']:
+        if BERT_EMBEDDER_SINGLE is None:
+            BERT_EMBEDDER_SINGLE = BertEmbedder(use_cuda=use_cuda, mode=mode)
+        return BERT_EMBEDDER_SINGLE
+    
 
 class Example:
     '''
@@ -65,7 +82,7 @@ def _truncate_and_padding_embedding(word: list, max_len) -> torch.tensor:
 def convert_examples_to_features(
         examples, 
         tokenizer: BertTokenizer, 
-        max_word_len=7
+        max_word_len=5
 ):
     '''
     Covert text triplets to tokenized features
@@ -84,7 +101,6 @@ def convert_examples_to_features(
         token_a = _truncate_and_padding_embedding(token_a, max_len=max_word_len)
         token_b = _truncate_and_padding_embedding(token_b, max_len=max_word_len)
         token_c = _truncate_and_padding_embedding(token_c, max_len=max_word_len)
-
         triple = token_a + token_b + token_c
 
         tokens = tokenizer.convert_tokens_to_ids(triple)
@@ -122,17 +138,22 @@ class BertEmbedder:
         self.tokenizer_class = tokenizer_class
         self.model_class = model_class
         self.tokenizer = self.tokenizer_class.from_pretrained(pretrained_weights)
-        self.hr_model = self.model_class.from_pretrained(pretrained_weights).cuda()
+        self.use_cuda = use_cuda
+        self.hr_model = self.model_class.from_pretrained(pretrained_weights)
         self.t_model = deepcopy(self.hr_model)
+        if self.use_cuda:
+            self.hr_model = self.hr_model.cuda()
+            self.t_model = self.t_model.cuda()
+
         self.max_seq_len = max_seq_len
         self.max_word_len = max_word_len
         self.mode = mode
-        self.use_cuda = use_cuda
         # tokenizer = BertTokenizer.from_pretrained(pretrained_weights)
         # model = BertModel.from_pretrained(pretrained_weights)
 
 
-    def get_bert_embeddings(self, examples) -> dict:
+    def get_bert_embeddings(self, examples, entity_only=False) -> dict:
+
         features = convert_examples_to_features(examples, self.tokenizer)
         
         if self.mode == 'forward':
@@ -157,9 +178,9 @@ class BertEmbedder:
         # all_token_ids = torch.tensor([f.token_ids for f in features], dtype=torch.long)
         # all_attention_mask = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
         # all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
-
         if self.use_cuda:
-            hr_token_ids = move_to_cuda(hr_token_ids)
+            if not entity_only:
+                hr_token_ids = move_to_cuda(hr_token_ids)
             t_token_ids = move_to_cuda(t_token_ids)
 
         logger.info('***Geting embedding***')
@@ -167,9 +188,10 @@ class BertEmbedder:
         # if self.mode == 'forward': 
         #     hr_last_hidden_states = self.hr_model(hr_token_ids)[0]  # Models outputs are now tuples
         #     t_last_hidden_states = self.t_model(t_token_ids)[0]  # Models outputs are now tuples
-
-        hr_last_hidden_states = self.hr_model(hr_token_ids)[0]  # Models outputs are now tuples
+        if not entity_only:
+            hr_last_hidden_states = self.hr_model(hr_token_ids)[0]  # Models outputs are now tuples
         t_last_hidden_states = self.t_model(t_token_ids)[0]
+
         h_emb = []
         r_emb = []
         t_emb = []
@@ -179,20 +201,23 @@ class BertEmbedder:
             h_size = len(features[i]['h_token_id'])
             r_size = len(features[i]['r_token_id'])
             t_size = len(features[i]['t_token_id'])
-            h_emb.append(torch.mean(hr_last_hidden_states[0, :h_size, :], dim=0))
-            r_emb.append(torch.mean(hr_last_hidden_states[0, h_size:h_size+r_size, :], dim=0))
+            if not entity_only:
+                h_emb.append(torch.mean(hr_last_hidden_states[0, :h_size, :], dim=0))
+                r_emb.append(torch.mean(hr_last_hidden_states[0, h_size:h_size+r_size, :], dim=0))
             t_emb.append(torch.mean(t_last_hidden_states[0, :t_size, :], dim=0))
         
-        
-        embeddings = {
-            'head': h_emb,
-            'relation': r_emb,
-            'tail': t_emb
-        }
+        if not entity_only:
+            embeddings = {
+                'head': h_emb,
+                'relation': r_emb,
+                'tail': t_emb
+            }
 
-        embeddings['head'] = torch.stack(embeddings['head']).cuda()
-        embeddings['relation'] = torch.stack(embeddings['relation']).cuda()
-        embeddings['tail'] = torch.stack(embeddings['tail']).cuda()
+            embeddings['head'] = torch.stack(embeddings['head']).cuda()
+            embeddings['relation'] = torch.stack(embeddings['relation']).cuda()
+            embeddings['tail'] = torch.stack(embeddings['tail']).cuda()
+        else:
+            embeddings = torch.stack(t_emb).cuda()
 
         # logger.info('batch size: {}'.format())
         return embeddings
@@ -226,14 +251,10 @@ def load_data(path, task, inverse=False):
     return examples
 
 
-def collate(batch_data, mode) -> list:
-    embedder = BertEmbedder(mode=mode, use_cuda=args.use_cuda)
-    return embedder.get_bert_embeddings(batch_data)
+def collate(batch_data, mode, **kwargs) -> list:
+    embedder = get_bert_embedder(mode=mode, use_cuda=args.use_cuda)
+    return embedder.get_bert_embeddings(batch_data, *kwargs)
 
-
-def embed_entities(batch_entities, mode) -> list:
-    embedder = BertEmbedder(mode=mode, use_cuda=args.use_cuda)
-    return embedder.get_bert_embeddings(batch_entities)
     
 
 class TrainDataSet(Dataset):
@@ -253,7 +274,7 @@ class TestDataSet(Dataset):
         self.examples = list(set(load_data(train_path, task, *args, **kwargs) \
             + load_data(test_path, task, *args, **kwargs) \
             + load_data(valid_path, task, *args, **kwargs)))
-    
+        self.data_len = len(self.examples)
     def __len__(self):
         return self.data_len
     
@@ -264,16 +285,18 @@ class TestDataSet(Dataset):
 def get_entities_emb(data_set: TestDataSet):
     data_loader_ = DataLoader(
         dataset=data_set,
-        batch_size=args.batch_size,
+        batch_size=int(args.batch_size/8),
         shuffle=False,
         num_workers=0,
-        collate_fn=partial(collate, mode='all')
+        collate_fn=partial(collate, mode='all', entity_only=True)
     )
 
     embs = []
     for batch in data_loader_:
-        batch['tail'] = batch['tail'].cpu()
-        embs.append(batch['tail'])
+        embs.append(batch.to("cpu"))
+        batch.detach()
+        torch.cuda.empty_cache()
+        gc.collect()
     
     embs = torch.stack(embs, dim=0)
     return embs
