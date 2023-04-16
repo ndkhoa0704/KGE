@@ -184,6 +184,8 @@ class BertEmbedder:
             t_token_ids = move_to_cuda(t_token_ids)
 
         logger.info('***Geting embedding***')
+        logger.info('t token shape {}'.format(t_token_ids.shape))
+        logger.info('hr token shape {}'.format(hr_token_ids.shape))
         # last_hidden_states = self.model(all_token_ids, all_attention_mask)[0].cpu()  # Models outputs are now tuples
         # if self.mode == 'forward': 
         #     hr_last_hidden_states = self.hr_model(hr_token_ids)[0]  # Models outputs are now tuples
@@ -219,6 +221,12 @@ class BertEmbedder:
         embeddings['head'] = torch.stack(embeddings['head'])
         embeddings['relation'] = torch.stack(embeddings['relation'])
         embeddings['tail'] = torch.stack(embeddings['tail'])
+
+        logger.info('h emb shape {}'.format(embeddings['head'].shape))
+        logger.info('r emb shape {}'.format(embeddings['relation'].shape))
+        logger.info('t emb shape {}'.format(embeddings['tail'].shape))
+
+        logger
 
         # logger.info('batch size: {}'.format())
         return embeddings
