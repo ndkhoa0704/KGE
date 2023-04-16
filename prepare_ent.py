@@ -101,6 +101,7 @@ def get_entities():
                 emb = model(features)[0]
                 logger.info(emb.shape)
                 emb = move_to_cpu(emb)
+                logger.info('Embeddings shape {}'.format(emb.shape))
             else:
                 emb = model(features)[0]
             emb = torch.mean(emb, dim=1)

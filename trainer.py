@@ -172,7 +172,7 @@ class Trainer:
 
 
     def train_loop(self):
-        if self.args == 'train':
+        if self.args.task == 'train':
             for i in range(self.args.no_epoch):
                 self.train_epoch(i)
                 save_model(i, self.model, self.optimizer)
