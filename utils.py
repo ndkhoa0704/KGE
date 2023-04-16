@@ -86,6 +86,25 @@ def move_to_cuda(sample):
     return _move_to_cuda(sample)
 
 
+def move_to_cpu(sample):
+    if len(sample) == 0:
+        return {}
+
+    def _move_to_cpu(maybe_tensor):
+        if torch.is_tensor(maybe_tensor):
+            return maybe_tensor.cpu()
+        elif isinstance(maybe_tensor, dict):
+            return {key: _move_to_cpu(value) for key, value in maybe_tensor.items()}
+        elif isinstance(maybe_tensor, list):
+            return [_move_to_cpu(x) for x in maybe_tensor]
+        elif isinstance(maybe_tensor, tuple):
+            return [_move_to_cpu(x) for x in maybe_tensor]
+        else:
+            return maybe_tensor
+
+    return _move_to_cpu(sample)
+
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
     def __init__(self, name, fmt=':f'):
@@ -125,3 +144,5 @@ class ProgressMeter(object):
         num_digits = len(str(num_batches // 1))
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
+
+    
