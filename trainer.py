@@ -8,6 +8,7 @@ from dissimilarities import l1_dissimilarity, l2_dissimilarity
 from functools import partial
 from prepare_ent import get_entities
 
+
 class Trainer:
     def __init__(self, model, args):
         self.args = args
@@ -44,14 +45,14 @@ class Trainer:
         test_dataloader_head =  DataLoader(
             self.test_dataset,
             shuffle=True,
-            collate_fn=lambda batch: collate(batch, mode='forward'),
+            collate_fn=partial(collate, mode='forward'),
             batch_size=self.args.batch_size
         )
 
         test_dataloader_tail =  DataLoader(
             self.test_dataset,
             shuffle=True,
-            collate_fn=lambda batch: collate(batch, mode='backward'),
+            collate_fn=partial(collate, mode='backward'),
             batch_size=self.args.batch_size
         )
 
@@ -110,6 +111,8 @@ class Trainer:
                         one_tail = move_to_cpu(batch['tail'][i])
                         print('tail shape', one_tail.shape)
                         ranking = all_axis(ents == one_tail).nonzero()
+                        if ranking.shape[0] == 0:
+                            continue
                         print(ranking)
                         # assert ranking.size(0) == 1
 
@@ -136,39 +139,57 @@ class Trainer:
 
         return metrics
 
+    # def score_fn(self, true_tail, pred_tail):
+    #     score = torch.abs(pred_tail - true_tail)
+    #     score = torch.norm(score, p=1, dim=1)
+    #     logger.info('score shape {}'.format(score.shape))
+    #     score = torch.logs(score)
+    #     # return score
+    #     return score
+    #     # return -self.sim(pred_tail, true_tail)
+
     def score_fn(self, true_tail, pred_tail):
-        score = torch.abs(pred_tail - true_tail)
-        score = torch.norm(score, p=1, dim=1)
-        score = F.logsigmoid(score).squeeze(dim=0)
+        score = torch.sum(true_tail * pred_tail, dim=1)
+        logger.info('score shape {}'.format(score.shape))
+        score = F.logsigmoid(score)
         # return score
         return score
         # return -self.sim(pred_tail, true_tail)
 
 
     def train_epoch(self, epoch):
-        train_data_loader = DataLoader(
+        train_data_loader_forward = DataLoader(
             self.train_dataset,
             shuffle=True,
-            collate_fn=lambda batch: collate(batch, mode='all'),
+            collate_fn=partial(collate, mode='forward'),
             batch_size=self.args.batch_size
         )
-        for batch in train_data_loader:
-            # self.train_sampler.set_epoch(epoch)
-            self.model.train()
-            self.optimizer.zero_grad()
-            
-            if self.args.use_cuda and torch.cuda.is_available():
-                batch = move_to_cuda(batch)
 
-            tail = self.model(batch['head'], batch['relation'])
+        train_data_loader_backward = DataLoader(
+            self.train_dataset,
+            shuffle=True,
+            collate_fn=partial(collate, mode='backward'),
+            batch_size=self.args.batch_size
+        )
+        self.model.train()
+        self.optimizer.zero_grad()
+        for dataloader in [train_data_loader_backward, train_data_loader_forward]:
+            for batch in dataloader:
+                # self.train_sampler.set_epoch(epoch)
 
-            score = self.score_fn(batch['tail'], tail)
+                if self.args.use_cuda and torch.cuda.is_available():
+                    batch = move_to_cuda(batch)
 
-            loss = - score.mean()
-            loss.backward()
+                tail = self.model(batch['head'], batch['relation'])
 
-            self.optimizer.step()
-            logger.info('Epoch: {} - loss: {}'.format(epoch, loss))
+                score = self.score_fn(batch['tail'], tail)
+
+                loss = - score.mean()
+
+                loss.backward()
+                self.optimizer.step()
+
+                logger.info('Epoch: {} - loss: {}'.format(epoch, loss))
 
 
     def train_loop(self):
