@@ -1,17 +1,13 @@
 import torch
 from torch.utils.data import DataLoader
-from data_loader import DataSet, collate
+from data_loader import DataSet, collate, FullDataSet
 from utils import move_to_cuda, save_model, load_model, move_to_cpu
 import torch.nn.functional as F
 from logger_config import logger
-from dissimilarities import l1_dissimilarity, l2_dissimilarity
+# from dissimilarities import l1_dissimilarity, l2_dissimilarity
 from functools import partial
 from prepare_ent import get_entities
 
-<<<<<<< HEAD
-
-=======
->>>>>>> fb25b13dcc534d46d5371386438f4f4013a032cc
 class Trainer:
     def __init__(self, model, args):
         self.args = args
@@ -48,22 +44,14 @@ class Trainer:
         test_dataloader_head =  DataLoader(
             self.test_dataset,
             shuffle=True,
-<<<<<<< HEAD
             collate_fn=partial(collate, mode='forward'),
-=======
-            collate_fn=lambda batch: collate(batch, mode='forward'),
->>>>>>> fb25b13dcc534d46d5371386438f4f4013a032cc
             batch_size=self.args.batch_size
         )
 
         test_dataloader_tail =  DataLoader(
             self.test_dataset,
             shuffle=True,
-<<<<<<< HEAD
             collate_fn=partial(collate, mode='backward'),
-=======
-            collate_fn=lambda batch: collate(batch, mode='backward'),
->>>>>>> fb25b13dcc534d46d5371386438f4f4013a032cc
             batch_size=self.args.batch_size
         )
 
@@ -94,20 +82,6 @@ class Trainer:
                     tail = self.model(batch['head'], batch['relation'])
                     if self.args.use_cuda:
                         tail = move_to_cpu(tail)
-                    # argsort = torch.argsort(score, dim = 1, descending=True)
-
-                    # score += filter_bias
-
-                    #Explicitly sort all the entities to ensure that there is no test exposure bias
-                    # argsort = torch.argsort(score, dim = 1, descending=True)
-
-                    # if mode == 'head-batch':
-                    #     positive_arg = positive_sample[:, 0]
-                    # elif mode == 'tail-batch':
-                    #     positive_arg = positive_sample[:, 2]
-                    # else:
-                    #     raise ValueError('mode %s not supported' % mode)
-                    
 
                     for i in range(batch_size):
                         #Notice that argsort is not ranking
@@ -122,11 +96,8 @@ class Trainer:
                         one_tail = move_to_cpu(batch['tail'][i])
                         print('tail shape', one_tail.shape)
                         ranking = all_axis(ents == one_tail).nonzero()
-<<<<<<< HEAD
                         if ranking.shape[0] == 0:
                             continue
-=======
->>>>>>> fb25b13dcc534d46d5371386438f4f4013a032cc
                         print(ranking)
                         # assert ranking.size(0) == 1
 
@@ -153,7 +124,6 @@ class Trainer:
 
         return metrics
 
-<<<<<<< HEAD
     # def score_fn(self, true_tail, pred_tail):
     #     score = torch.abs(pred_tail - true_tail)
     #     score = torch.norm(score, p=1, dim=1)
@@ -167,19 +137,12 @@ class Trainer:
         score = torch.sum(true_tail * pred_tail, dim=1)
         logger.info('score shape {}'.format(score.shape))
         score = F.logsigmoid(score)
-=======
-    def score_fn(self, true_tail, pred_tail):
-        score = torch.abs(pred_tail - true_tail)
-        score = torch.norm(score, p=1, dim=1)
-        score = F.logsigmoid(score).squeeze(dim=0)
->>>>>>> fb25b13dcc534d46d5371386438f4f4013a032cc
         # return score
         return score
         # return -self.sim(pred_tail, true_tail)
 
 
     def train_epoch(self, epoch):
-<<<<<<< HEAD
         train_data_loader_forward = DataLoader(
             self.train_dataset,
             shuffle=True,
@@ -212,31 +175,6 @@ class Trainer:
                 self.optimizer.step()
 
                 logger.info('Epoch: {} - loss: {}'.format(epoch, loss))
-=======
-        train_data_loader = DataLoader(
-            self.train_dataset,
-            shuffle=True,
-            collate_fn=lambda batch: collate(batch, mode='all'),
-            batch_size=self.args.batch_size
-        )
-        for batch in train_data_loader:
-            # self.train_sampler.set_epoch(epoch)
-            self.model.train()
-            self.optimizer.zero_grad()
-            
-            if self.args.use_cuda and torch.cuda.is_available():
-                batch = move_to_cuda(batch)
-
-            tail = self.model(batch['head'], batch['relation'])
-
-            score = self.score_fn(batch['tail'], tail)
-
-            loss = - score.mean()
-            loss.backward()
-
-            self.optimizer.step()
-            logger.info('Epoch: {} - loss: {}'.format(epoch, loss))
->>>>>>> fb25b13dcc534d46d5371386438f4f4013a032cc
 
 
     def train_loop(self):

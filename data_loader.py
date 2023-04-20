@@ -32,8 +32,8 @@ class Example:
     '''
     Store textual triples
     '''
-    def __init__(self, guid, head, relation, tail):
-        self.guid = guid
+    def __init__(self, head, relation, tail):
+        # self.guid = guid
         self.h = head
         self.r = relation
         self.t = tail
@@ -50,6 +50,12 @@ class Example:
     def tail(self):
         return _parse_entity(self.t)
 
+    def __str__(self):
+        return '''
+        head: {}
+        relation: {}
+        tail: {}
+        '''.format(self.h, self.r, self.t)
 
 def _truncate_seq_triple(tokens_a, tokens_b, tokens_c, max_length):
     """Truncates a sequence triple in place to the maximum length."""
@@ -141,7 +147,7 @@ class BertEmbedder:
         self.tokenizer = self.tokenizer_class.from_pretrained(pretrained_weights)
         self.use_cuda = use_cuda
         self.hr_model = self.model_class.from_pretrained(pretrained_weights)
-        self.t_model = deepcopy(self.hr_model)
+        self.t_model = self.model_class.from_pretrained(pretrained_weights)
         if self.use_cuda:
             self.hr_model = self.hr_model.to('cuda')
             self.t_model = self.t_model.to('cuda')
@@ -226,16 +232,13 @@ class BertEmbedder:
         logger.info('r emb shape {}'.format(embeddings['relation'].shape))
         logger.info('t emb shape {}'.format(embeddings['tail'].shape))
 
-        logger
-
         # logger.info('batch size: {}'.format())
         return embeddings
 
 
-def load_data(path, task, inverse=True):
+def load_data(path, inverse=True):
     '''Load data and create examples'''
 
-    assert task and task in ['train', 'test', 'valid']
     assert os.path.exists(path)
     with open(path, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -244,20 +247,19 @@ def load_data(path, task, inverse=True):
     examples = []
     for i in range(len(data)):
         examples.append(Example(
-            guid=f'{task}-{i}',
+            # guid=f'{task}-{i}',
             head=data[i]['head'],
             relation=data[i]['relation'],
             tail=data[i]['tail']
         ))
         if inverse:
             examples.append(Example(
-                guid=f'{task}-{i}-inv',
+                # guid=f'{task}-{i}-inv',
                 head=data[i]['tail'],
                 relation='inverse ' + data[i]['relation'],
                 tail=data[i]['head']  
             ))
         data[i] = None
-
     return examples
 
 
@@ -266,9 +268,9 @@ def collate(batch_data, mode, **kwargs) -> list:
     return embedder.get_bert_embeddings(batch_data, *kwargs)
 
 
-class DataSet(Dataset):
-    def __init__(self, path, task, *args, **kwargs):
-        self.examples = load_data(path, task, *args, **kwargs)
+class BaseDataSet(Dataset):
+    def __init__(self, path, *args, **kwargs):
+        self.examples = load_data(path, *args, **kwargs)
         self.data_len = len(self.examples)
     
     def __len__(self):
@@ -276,3 +278,49 @@ class DataSet(Dataset):
     
     def __getitem__(self, index):
         return self.examples[index]
+    
+
+class KGEDataSet(Dataset):
+    def __init__(self, train_path, test_path: None, valid_path: None,  *args, **kwargs):
+        self.__train_dataset = BaseDataSet(train_path, *args, **kwargs)
+        self.__test_dataset = BaseDataSet(test_path, *args, **kwargs) if test_path else []
+        self.__valid_dataset = BaseDataSet(valid_path, *args, **kwargs) if valid_path else []
+
+        self.embeddings = {
+            'head': [],
+            'relation': [],
+            'tail': []
+        }
+        for dataset in [self.__train_dataset, self.__test_dataset, self.__valid_dataset]:
+            dataloader = DataLoader(
+                dataset, 
+                batch_size=args.batch_size,
+                collate_fn=collate
+            )
+            for batch in dataloader:
+                self.embeddings['head'].append(batch['head'])
+                self.embeddings['relation'].append(batch['relation'])
+                self.embeddings['tail'].append(batch['tail'])
+
+        self.embeddings['head'] = torch.stack(self.embeddings['head'])
+        self.embeddings['relation'] = torch.stack(self.embeddings['relation'])
+        self.embeddings['tail'] = torch.stack(self.embeddings['tail'])
+
+        logger.info('h emb shape {}'.format(self.embeddings['head'].shape))
+        logger.info('r emb shape {}'.format(self.embeddings['relation'].shape))
+        logger.info('t emb shape {}'.format(self.embeddings['tail'].shape))
+
+        self.data_len = self.embeddings['head'].shape[0]
+
+    def __len__(self):
+        return self.data_len
+    
+    
+    def __getitem__(self, index):
+        emb = {
+            'head': self.embeddings['head'][index],
+            'relation': self.embeddings['relation'][index],
+            'tail': self.embeddings['tail'][index]
+        }
+        
+        return emb
