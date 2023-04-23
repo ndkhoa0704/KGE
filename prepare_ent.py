@@ -41,6 +41,7 @@ def get_features(word, tokenizer: BertTokenizer):
     token_ids = tokenizer.convert_tokens_to_ids(token)
     return token_ids
 
+
 def collate(batch, tokenizer: BertTokenizer):
     new_batch = []
     for item in batch:
@@ -48,9 +49,7 @@ def collate(batch, tokenizer: BertTokenizer):
         token = _truncate_and_padding_embedding(token, args.max_word_len)
         token_ids = tokenizer.convert_tokens_to_ids(token)
         new_batch.append(token_ids)
-    return new_batch
-
-        
+    return new_batch 
 
 
 class EntitiesDataset(Dataset):
@@ -64,15 +63,12 @@ class EntitiesDataset(Dataset):
         return self.entities[index]
     
 
-
-
-def get_entities():
+def get_entities(model):
     logger.info('***Getting all entities embeddings***')
     entities = list(set(load_data(args.train_path) + load_data(args.test_path) + load_data(args.valid_path)))
 
-    model = BertModel.from_pretrained('bert-base-uncased')
-    if args.use_cuda:
-        model = model.to('cuda')
+    # if args.use_cuda:
+    #     model = model.to('cuda')
 
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 

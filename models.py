@@ -8,11 +8,11 @@ class CustomTransSmth(nn.Module):
         super().__init__(*args, **kwargs)
         self.dim = dim
         self.wr = nn.Parameter(torch.rand((self.dim, self.dim)), requires_grad=True)
-        self.wh = nn.Parameter(torch.rand((self.dim, self.dim)), requires_grad=True)
+        # self.wh = nn.Parameter(torch.rand((self.dim, self.dim)), requires_grad=True)
 
 
     def forward(self, h, r):
-        t = h@self.wh + r@self.wr
+        t = h@self.wh + r
         return t
     
 

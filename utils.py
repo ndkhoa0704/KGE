@@ -105,6 +105,16 @@ def move_to_cpu(sample):
     return _move_to_cpu(sample)
 
 
+class HashTensorWrapper():
+    def __init__(self, tensor):
+        self.tensor = move_to_cpu(tensor)
+
+    def __hash__(self):
+        return hash(self.tensor.numpy().tobytes())
+
+    def __eq__(self, other):
+        return torch.all(self.tensor == other.tensor)
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
     def __init__(self, name, fmt=':f'):
