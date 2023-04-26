@@ -8,19 +8,20 @@ from logger_config import logger
 from functools import partial
 from prepare_ent import get_entities
 from data_loader import get_bert_embedder
+from dissimilarities import l2_torus_dissimilarity
 
 
 class Trainer:
     def __init__(self, model, args):
         self.args = args
         self.use_cuda = args.use_cuda
-        self.model = model(self.args.gamma, 768)
+        self.model = model(768)
         logger.info(self.model)
         self._setup_training()
         self.train_dataset = None
         self.test_dataset = None
         self.all_dataset = None
-        self.sim = torch.nn.CosineSimilarity(dim=1, eps=1e-6)
+        self.loss = torch.nn.BCELoss()
         
         self.optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.model.parameters()), 
@@ -136,13 +137,9 @@ class Trainer:
         return metrics
 
     def score_fn(self, true_tail, pred_tail):
-        score = torch.abs(pred_tail - true_tail)
-        score = torch.norm(score, p=2, dim=1)
-        # logger.info('score shape {}'.format(score.shape))
-        score = F.sigmoid(score)
-        # return score
-        return score
-        # return -self.sim(pred_tail, true_tail)
+
+        # return l2_torus_dissimilarity(true_tail, pred_tail)
+        return 1 - F.cosine_similarity(pred_tail.flatten(1,2), true_tail.flattent(1,2))
 
     # def score_fn(self, true_tail, pred_tail):
     #     score = torch.sum(true_tail * pred_tail, dim=1)

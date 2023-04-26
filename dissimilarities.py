@@ -39,7 +39,7 @@ def l2_torus_dissimilarity(a, b):
     for details about the definition of this dissimilarity function.
 
     """
-    assert len(a.shape) == len(b.shape)
+    # assert len(a.shape) == len(b.shape)
     return 4 * min((a - b) ** 2, 1 - (a - b) ** 2).sum(dim=-1)
 
 
