@@ -197,7 +197,7 @@ class Trainer:
             if self.entities_emb is None:
                 self.entities_emb = self._get_all_entities()
             logger.info('***Loading checkpoint***')
-            self.model, self.optimizer = load_model(epoch=20, model=self.model, optimizer=self.optimizer)
+            self.model, self.optimizer = load_model(epoch=self.args.no_epoch, model=self.model, optimizer=self.optimizer)
             self.test_step()
         elif self.args.task == 'valid':
             # TODO
