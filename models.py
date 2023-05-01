@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 from logger_config import logger
+import torch.nn.functional as F
 
 
 class CustomTransSmth(nn.Module):
@@ -12,7 +13,7 @@ class CustomTransSmth(nn.Module):
         self.lamb = nn.Parameter(torch.rand((1,)), requires_grad=True)
 
     def forward(self, h, r):
-        t = h@self.wh.expand(h.shape[0], -1, -1) + r@self.wr.expand(h.shape[0], -1, -1) + self.lamb
+        t = torch.sigmoid(h@self.wh.expand(h.shape[0], -1, -1) + r@self.wr.expand(h.shape[0], -1, -1) + self.lamb)
         return t
     
 

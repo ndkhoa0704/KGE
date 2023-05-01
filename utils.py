@@ -14,13 +14,16 @@ class AttrDict:
     pass
 
 
-def save_model(epoch, model, optimizer):
+def save_model(epoch, model, optimizer, best=False):
     """Saves model checkpoint on given epoch with given data name.
     """
     checkpoint_folder = Path.cwd() / 'model_checkpoints'
     if not checkpoint_folder.is_dir():
         checkpoint_folder.mkdir()
-    file = checkpoint_folder / f'epoch_{epoch}.pt'
+    if not best:
+        file = checkpoint_folder / f'epoch_{epoch}.pt'
+    else: 
+        file = checkpoint_folder / f'best.pt'
     if not file.is_file():
         file.touch()
     torch.save(
@@ -36,7 +39,10 @@ def save_model(epoch, model, optimizer):
 def load_model(epoch, model, optimizer):
     """Loads model state from file.
     """
-    file = Path.cwd() / 'model_checkpoints' / f'epoch_{epoch}.pt'
+    if epoch:
+        file = Path.cwd() / 'model_checkpoints' / f'epoch_{epoch}.pt'
+    else:
+        file = Path.cwd() / 'model_checkpoints' / f'best.pt'
     checkpoint = torch.load(file)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -155,4 +161,12 @@ class ProgressMeter(object):
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
 
-    
+
+
+
+def all_axis(tensor):
+    new_tensor = []
+    for i in tensor:
+        new_tensor.append(torch.all(i))
+    new_tensor = torch.tensor(new_tensor)
+    return new_tensor
