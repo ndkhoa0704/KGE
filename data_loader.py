@@ -15,9 +15,6 @@ ENT_DESC = None
 
 
 # Dataset definitions
-TRAIN_DATASET = None
-TEST_DATASET = None
-VALID_DATASET = None
 
 
 def get_ent_desc():
@@ -131,10 +128,10 @@ class BertEmbedder:
         # exit()
 
 
-        if self.use_cuda:
-            move_to_cpu(h_token_ids)
-            move_to_cpu(r_token_ids)
-            move_to_cpu(t_token_ids)
+        # if self.use_cuda:
+        #     move_to_cpu(h_token_ids)
+        #     move_to_cpu(r_token_ids)
+        #     move_to_cpu(t_token_ids)
 
         
         # embeddings = {
@@ -143,15 +140,17 @@ class BertEmbedder:
         #     'tail': torch.mean(t_last_hidden_states[:, -main_args.max_word_len:, :], dim=1)
         # }
 
-        embeddings = {
-            'head': h_last_hidden_states,
-            'relation': r_last_hidden_states,
-            'tail': t_last_hidden_states
-        }
+        # embeddings = {
+        #     'head': h_last_hidden_states,
+        #     'relation': r_last_hidden_states,
+        #     'tail': t_last_hidden_states
+        # }
 
-        logger.info('h emb shape {}'.format(embeddings['head'].shape))
-        logger.info('r emb shape {}'.format(embeddings['relation'].shape))
-        logger.info('t emb shape {}'.format(embeddings['tail'].shape))
+        # logger.info('h emb shape {}'.format(embeddings['head'].shape))
+        # logger.info('r emb shape {}'.format(embeddings['relation'].shape))
+        # logger.info('t emb shape {}'.format(embeddings['tail'].shape))
+
+        embeddings = move_to_cuda(torch.stack((h_last_hidden_states, r_last_hidden_states, t_last_hidden_states), dim=1))
 
         # logger.info('batch size: {}'.format())
         return embeddings
@@ -191,21 +190,25 @@ def convert_examples_to_features(
             logger.info("Writing example %d of %d" % (i, len(examples)))
         token_h = tokenizer.tokenize(example.head) + tokenizer.tokenize(example.head_desc)
         token_r = tokenizer.tokenize(example.relation)
-        token_t = tokenizer.tokenize(example.tail) + tokenizer.tokenize(example.tail_desc)
+        # token_t = tokenizer.tokenize(example.tail) + tokenizer.tokenize(example.tail_desc)
+        token_t = tokenizer.tokenize(example.tail)
+
 
         token_h = _truncate_and_padding_embedding(token_h, max_len=max_word_len)
         token_r = _truncate_and_padding_embedding(token_r, max_len=max_word_len)
         token_t = _truncate_and_padding_embedding(token_t, max_len=max_word_len)
-        triple = token_h + token_r + token_t
 
-        tokens = tokenizer.convert_tokens_to_ids(triple)
+        tokenized_h = tokenizer.convert_tokens_to_ids(token_h)
+        tokenized_r = tokenizer.convert_tokens_to_ids(token_r)
+        tokenized_t = tokenizer.convert_tokens_to_ids(token_t)
+
 
         features.append({
-            'h_token_id': tokens[:max_word_len],
-            'r_token_id': tokens[max_word_len:2*max_word_len],
-            't_token_id': tokens[2*max_word_len:],
-            'hr_token_id': tokens[:2*max_word_len],
-            'rt_token_id': tokens[max_word_len:],
+            'h_token_id': tokenized_h,
+            'r_token_id': tokenized_r,
+            't_token_id': tokenized_t
+            # 'hr_token_id': tokens[:2*max_word_len],
+            # 'rt_token_id': tokens[max_word_len:],
         })
 
         examples[i] = None
@@ -252,9 +255,11 @@ def collate(batch_data, **kwargs) -> list:
     return embedder.get_bert_embeddings(batch_data, *kwargs)
 
 
-class BaseDataSet(Dataset):
-    def __init__(self, path, *args, **kwargs):
-        self.examples = load_data(path, *args, **kwargs)
+class KGEDataSet(Dataset):
+    def __init__(self, paths: list[str], *args, **kwargs):
+        self.examples = []
+        for path in paths:
+            self.examples += load_data(path, *args, **kwargs)
         self.data_len = len(self.examples)
     
     def __len__(self):
@@ -262,74 +267,6 @@ class BaseDataSet(Dataset):
     
     def __getitem__(self, index):
         return self.examples[index]
-    
-
-class KGEDataSet(Dataset):
-    def __init__(self, train_path=None, test_path=None, valid_path=None, *args, **kwargs):
-        assert train_path or test_path or valid_path
-
-        global TRAIN_DATASET
-        global TEST_DATASET
-        global VALID_DATASET
-
-
-        self.__train_dataset = []
-        self.__test_dataset = []
-        self.__valid_dataset = []
-
-        if train_path:
-            if TRAIN_DATASET is None:
-                TRAIN_DATASET  = BaseDataSet(path=train_path, *args, **kwargs)
-            self.__train_dataset = TRAIN_DATASET
-        if test_path:
-            if TEST_DATASET is None:
-                TEST_DATASET  = BaseDataSet(path=test_path, *args, **kwargs)
-            self.__test_dataset = TEST_DATASET
-        if valid_path:
-            if VALID_DATASET is None:
-                VALID_DATASET  = BaseDataSet(path=valid_path, *args, **kwargs)
-            self.__valid_dataset = VALID_DATASET
-
-
-        self.embeddings = {
-            'head': [], 
-            'relation': [],
-            'tail': []
-        }
-        for dataset in [self.__train_dataset, self.__test_dataset, self.__valid_dataset]:
-            dataloader = DataLoader(
-                dataset, 
-                batch_size=main_args.batch_size,
-                collate_fn=collate
-            )
-            for batch in dataloader:
-                self.embeddings['head'].append(batch['head']) 
-                self.embeddings['relation'].append(batch['relation'])
-                self.embeddings['tail'].append(batch['tail'])
-
-        self.embeddings['head'] = move_to_cpu(torch.cat(self.embeddings['head']))
-        self.embeddings['relation'] = move_to_cpu(torch.cat(self.embeddings['relation']))
-        self.embeddings['tail'] = move_to_cpu(torch.cat(self.embeddings['tail']))
-
-        # logger.info('h emb shape {}'.format(self.embeddings['head'].shape))
-        # logger.info('r emb shape {}'.format(self.embeddings['relation'].shape))
-        # logger.info('t emb shape {}'.format(self.embeddings['tail'].shape))
-
-        self.data_len = self.embeddings['head'].shape[0]
-
-    def __len__(self):
-        return self.data_len
-    
-    def __getitem__(self, index):
-        item = torch.stack(
-            (
-                self.embeddings['head'][index], 
-                self.embeddings['relation'][index], 
-                self.embeddings['tail'][index]
-            ),
-        )
-        # logger.info('Item shape: {}'.format(item.shape))
-        return item
     
 
 class EntitiesDataset(Dataset):
@@ -352,7 +289,7 @@ def get_all_entities(train_path, test_path, valid_path):
     )
 
     all_entities = []
-    for batch in DataLoader(all_dataset):
+    for batch in DataLoader(all_dataset, batch_size=main_args.batch_size):
         # all_entities.append(batch[:, 0, :])
         all_entities.append(batch[:, 2, :])
 
@@ -360,6 +297,7 @@ def get_all_entities(train_path, test_path, valid_path):
     # print(all_entities[:5])
     ents = torch.unique(all_entities, dim=0)
     # exit()
-
+    print(ents.shape)
+    # exit()
     ents = move_to_cpu(ents)
     return ents

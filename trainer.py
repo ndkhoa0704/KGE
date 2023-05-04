@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
-from data_loader import KGEDataSet, EntitiesDataset
+from data_loader import KGEDataSet, EntitiesDataset, collate
 from utils import move_to_cuda, save_model, load_model, move_to_cpu, all_axis
 import torch.nn.functional as F
 from logger_config import logger
@@ -9,16 +9,19 @@ from prepare_ent import get_entities
 from data_loader import get_bert_embedder, get_all_entities
 from dissimilarities import l2_torus_dissimilarity
 import json
+import gc
 
+@torch.no_grad()
+def get_tails(dataset, batch_size=512):
+    all_entities = []
+    for batch in DataLoader(dataset, batch_size, collate_fn=collate):
+        all_entities.append(move_to_cpu(batch[:, 2, :]))
 
-# def get_ents(dataset):
-#     all_entities = []
-#     for batch in DataLoader(dataset):
-#         all_entities.append(batch[:, 2, :])
-
-#     all_entities = torch.cat(list(all_entities), dim=0)
-#     ents = torch.unique(all_entities, dim=0)
-#     return move_to_cpu(ents)
+    all_entities = torch.cat(list(all_entities), dim=0)
+    ents = torch.unique(all_entities, dim=0)
+    ents = move_to_cpu(ents)
+    gc.collect()
+    return ents
 
 
 class Trainer:
@@ -28,22 +31,23 @@ class Trainer:
         self.model = model(768)
         logger.info(self.model)
         self._setup_training()
+
         # self.train_dataset = KGEDataSet(train_path=self.args.train_path)
-        self.test_dataset = KGEDataSet(test_path=self.args.test_path)
-        self.valid_dataset = KGEDataSet(valid_path=self.args.valid_path)
-        self.all_ents_embs = get_all_entities(
-            train_path=self.args.train_path,
-            test_path=self.args.test_path,
-            valid_path=self.args.valid_path
-        )
-        # self.all_ents_embs = None
-        # self.all_dataset = None
+        # self.test_dataset = KGEDataSet(test_path=self.args.test_path)
+        # self.valid_dataset = KGEDataSet(valid_path=self.args.valid_path)
+
+        self.train_dataset = None
+        self.test_dataset = None
+        self.valid_dataset = None
+        self.all_dataset = None
+
+        self.all_ents_embs = None
         
         self.optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.model.parameters()), 
             lr=self.args.lr
         )
-        self.entities_dataset = None
+        
         # self.entities_emb = torch.load('entities.pt')
 
         self.task = args.task
@@ -61,14 +65,18 @@ class Trainer:
         
         logs = []           
         dataloader =  DataLoader(
-            DataSet,
-            batch_size=self.args.batch_size
+            dataset=DataSet,
+            batch_size=self.args.batch_size,
+            collate_fn=collate
         )
 
         ent_dataloader = DataLoader(
-            dataset=EntitiesDataset(self.all_ents_embs),
-            batch_size=self.args.batch_size
+            dataset=self.all_dataset,
+            batch_size=self.args.batch_size,
+            collate_fn=collate
         )
+
+        print(self.all_dataset)
         
         logs = []
 
@@ -77,8 +85,8 @@ class Trainer:
 
         with torch.no_grad():
             for batch in dataloader: 
-                if self.args.use_cuda and torch.cuda.is_available():
-                    batch = move_to_cuda(batch)
+                # if self.args.use_cuda and torch.cuda.is_available():
+                #     batch = move_to_cuda(batch)
 
                 batch_size = batch.size(0)
                 tail = self.model(batch[:, 0, :], batch[:, 1, :])
@@ -87,22 +95,25 @@ class Trainer:
                 # if self.args.use_cuda:
                 #     tail = move_to_cpu(tail)
 
+
                 for i in range(batch_size):
                     # Notice that argsort is not ranking
                     # logger.info('predicted_tail shape {}'.format(tail[i].shape))
                     score = None
                     one_tail = tail[i]
+
                     for ent_batch in ent_dataloader:
-                        batch_score = self.test_batch(ent_batch, one_tail.reshape(1, *tail[i].shape))
+                        batch_score = self.test_batch(ent_batch[:, 2, :], one_tail.reshape(1, *tail[i].shape))
                         if score is None:
                             score = batch_score
                         else:
                             score = torch.cat((score, batch_score))
                     
                     # score = self.score_fn(tail[i].reshape(1, *tail[i].shape), all_ents)
+                    print(score.shape)
                     argsort = torch.argsort(score, dim = 0, descending=False)
-                    ents = torch.index_select(self.all_ents_embs,0, argsort)
-                    # one_tail = move_to_cpu(batch[i, 2, :])
+                    ents = torch.index_select(self.all_ents_embs, 0, argsort)
+                    one_tail = move_to_cpu(one_tail)
                     ranking = all_axis(ents == one_tail).nonzero()
                     # print(ranking.shape)
                     assert ranking.size(0) == 1
@@ -132,34 +143,24 @@ class Trainer:
 
         return metrics
 
+
     def score_fn(self, true_tail, pred_tail):
-
         # return l2_torus_dissimilarity(true_tail, pred_tail)
-        logger.debug('true tail shape: {}'.format(true_tail.shape))
-        logger.debug('pred tail shape: {}'.format(pred_tail.shape))
+        logger.info('true tail shape: {}'.format(true_tail.shape))
+        logger.info('pred tail shape: {}'.format(pred_tail.shape))
         return F.cosine_similarity(pred_tail.flatten(1,2), true_tail.flatten(1,2))
-    
-
-
-    # def score_fn(self, true_tail, pred_tail):
-    #     score = torch.sum(true_tail * pred_tail, dim=1)
-    #     # logger.info('score shape {}'.format(score.shape))
-    #     score = F.relu(score)
-    #     # return score
-    #     return score
-    #     # return -self.sim(pred_tail, true_tail)
 
 
     def test_batch(self, batch, pred_tail):
         if self.args.use_cuda:
             batch = move_to_cuda(batch)
             tail = move_to_cuda(pred_tail)
-            score = self.score_fn(tail, batch[:,2,:])
+            score = self.score_fn(tail, batch)
             batch = move_to_cpu(batch)
             tail = move_to_cpu(tail)
         else:
-            score = self.score_fn(pred_tail, batch[:,2,:])
-        return score
+            score = self.score_fn(pred_tail, batch)
+        return move_to_cpu(score)
         
         
 
@@ -167,6 +168,7 @@ class Trainer:
         train_data_loader = DataLoader(
             self.train_dataset,
             shuffle=True,
+            collate_fn=collate,
             batch_size=self.args.batch_size
         )
 
@@ -174,8 +176,8 @@ class Trainer:
         self.optimizer.zero_grad()
         scores = []
         for batch in train_data_loader:
-            if self.args.use_cuda and torch.cuda.is_available():
-                batch = move_to_cuda(batch)
+            # if self.args.use_cuda and torch.cuda.is_available():
+            #     batch = move_to_cuda(batch)
             
             logger.info('Batch size {}'.format(batch.shape))
             tail = self.model(batch[:, 0, :], batch[:, 1, :])
@@ -194,22 +196,70 @@ class Trainer:
 
     def train_loop(self):
         if self.args.task == 'train':
-            best_score = None    
+            # if self.train_dataset is None:
+            self.train_dataset = KGEDataSet(paths=[self.args.train_path])
+            best_score = None
             for i in range(self.args.no_epoch):
                 score = self.train_epoch(i)
                 if best_score is None or best_score > score:
                     save_model(i, self.model, self.optimizer, best=True)
                     best_score = score
-                    metrics = self.test_step(self.test_dataset)
-            json.dump(metrics, open('metrics.json', 'w'))
+
+            del self.train_dataset
+            gc.collect()
+            
+            self.all_ents_embs = get_tails(self.all_dataset)
+
+            # if self.test_dataset =  
+            self.all_dataset = KGEDataSet(
+                paths=[
+                    self.args.train_path,
+                    self.args.test_path,
+                    self.args.valid_path
+                ]
+            )
+            
+            self.test_dataset = KGEDataSet(paths=[self.args.test_path])
+            metrics = self.test_step(self.test_dataset)
+            
+            del self.test_dataset
+            gc.collect()
+
+            json.dump(metrics, open('train_metrics.json', 'w'))
+
         elif self.args.task == 'test':
+            self.test_dataset = KGEDataSet(paths=[self.args.test_path])
+
+            # if self.test_dataset =  
+            self.all_dataset = KGEDataSet(
+                paths=[
+                    self.args.train_path,
+                    self.args.test_path,
+                    self.args.valid_path
+                ]
+            )
+
+            self.all_ents_embs = get_tails(self.all_dataset)
+
+            logger.info('***Loading checkpoint***')
+            self.model, self.optimizer = load_model(epoch=None, model=self.model, optimizer=self.optimizer)
+            metrics = self.test_step(self.test_dataset)
+
+            del self.test_dataset
+            gc.collect()
+
+            json.dump(metrics, open('test_metrics.json', 'w'))
+
+
+        elif self.args.task == 'valid':
+            self.valid_dataset = KGEDataSet(paths=[self.args.valid_path])
             logger.info('***Loading checkpoint***')
             self.model, self.optimizer = load_model(epoch=None, model=self.model, optimizer=self.optimizer)
             metrics = self.test_step(self.valid_dataset)
-            json.dump(metrics, open('metrics.json', 'w'))
-        elif self.args.task == 'valid':
-            # TODO
-            raise NotImplementedError()
+            del self.valid_dataset
+            gc.collect()
+
+            json.dump(metrics, open('valid_metrics.json', 'w'))
         else:
             raise Exception('Unsupported task')
 
