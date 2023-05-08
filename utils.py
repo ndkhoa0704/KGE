@@ -162,11 +162,22 @@ class ProgressMeter(object):
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
 
 
-
-
 def all_axis(tensor):
     new_tensor = []
     for i in tensor:
         new_tensor.append(torch.all(i))
     new_tensor = torch.tensor(new_tensor)
     return new_tensor
+
+
+def rowwise_in(a, b):
+    shape1 = a.shape[0]
+    shape2 = b.shape[0]
+    c  = a.shape[1]
+    assert c == b.shape[1] , "Tensors must have same number of columns"
+
+    a_expand = a.unsqueeze(1).expand(-1,shape2,c)
+    b_expand = b.unsqueeze(0).expand(shape1,-1,c)
+    # element-wise equality
+    mask = (a_expand == b_expand).all(-1).any(-1)
+    return ~mask

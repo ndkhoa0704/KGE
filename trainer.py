@@ -1,15 +1,12 @@
 import torch
 from torch.utils.data import DataLoader
-from data_loader import KGEDataSet, EntitiesDataset, collate
+from data_loader import KGEDataSet, collate, collate_entity
 from utils import move_to_cuda, save_model, load_model, move_to_cpu, all_axis
 import torch.nn.functional as F
 from logger_config import logger
-from functools import partial
-from prepare_ent import get_entities
-from data_loader import get_bert_embedder, get_all_entities
-from dissimilarities import l2_torus_dissimilarity
 import json
 import gc
+
 
 @torch.no_grad()
 def get_tails(dataset, batch_size=512):
@@ -19,9 +16,20 @@ def get_tails(dataset, batch_size=512):
 
     all_entities = torch.cat(list(all_entities), dim=0)
     ents = torch.unique(all_entities, dim=0)
-    ents = move_to_cpu(ents)
+    ents = move_to_cuda(ents)
     gc.collect()
     return ents
+
+# @torch.no_grad()
+# def get_tails(dataset, batch_size=512):
+#     all_entities = []
+#     for batch in DataLoader(dataset, batch_size, collate_fn=collate_entity):
+#         all_entities.append(move_to_cpu(batch))
+
+#     all_entities = torch.cat(list(all_entities), dim=0)
+#     all_entities = move_to_cuda(all_entities)
+#     gc.collect()
+#     return all_entities
 
 
 class Trainer:
@@ -70,13 +78,12 @@ class Trainer:
             collate_fn=collate
         )
 
-        ent_dataloader = DataLoader(
-            dataset=self.all_dataset,
-            batch_size=self.args.batch_size,
-            collate_fn=collate
-        )
+        # ent_dataloader = DataLoader(
+        #     dataset=self.all_dataset,
+        #     batch_size=self.args.batch_size,
+        #     collate_fn=collate
+        # )
 
-        print(self.all_dataset)
         
         logs = []
 
@@ -100,22 +107,25 @@ class Trainer:
                     # Notice that argsort is not ranking
                     # logger.info('predicted_tail shape {}'.format(tail[i].shape))
                     score = None
-                    one_tail = tail[i]
+                    pred_tail = tail[i]
+                    if self.args.use_cuda:
+                        pred_tail = move_to_cuda(pred_tail)
 
-                    for ent_batch in ent_dataloader:
-                        batch_score = self.test_batch(ent_batch[:, 2, :], one_tail.reshape(1, *tail[i].shape))
-                        if score is None:
-                            score = batch_score
-                        else:
-                            score = torch.cat((score, batch_score))
-                    
-                    # score = self.score_fn(tail[i].reshape(1, *tail[i].shape), all_ents)
+                    # for ent_batch in ent_dataloader:
+                    #     batch_score = self.test_batch(ent_batch[:, 2, :], one_tail.reshape(1, *tail[i].shape))
+                    #     if score is None:
+                    #         score = batch_score
+                    #     else:
+                    #         score = torch.cat((score, batch_score))
+                    true_tail = batch[i, 2, :]
+                    score = self.score_fn(pred_tail.reshape(1, *pred_tail.shape), self.all_ents_embs)
                     print(score.shape)
                     argsort = torch.argsort(score, dim = 0, descending=False)
+                    print(argsort)
                     ents = torch.index_select(self.all_ents_embs, 0, argsort)
-                    one_tail = move_to_cpu(one_tail)
-                    ranking = all_axis(ents == one_tail).nonzero()
-                    # print(ranking.shape)
+                    # one_tail = move_to_cpu(one_tail)
+                    ranking = all_axis(ents == true_tail).nonzero()
+                    print(ranking.shape)
                     assert ranking.size(0) == 1
 
                     #ranking + 1 is the true ranking used in evaluation metrics
@@ -146,9 +156,10 @@ class Trainer:
 
     def score_fn(self, true_tail, pred_tail):
         # return l2_torus_dissimilarity(true_tail, pred_tail)
-        logger.info('true tail shape: {}'.format(true_tail.shape))
-        logger.info('pred tail shape: {}'.format(pred_tail.shape))
-        return F.cosine_similarity(pred_tail.flatten(1,2), true_tail.flatten(1,2))
+        # logger.info('true tail shape: {}'.format(true_tail.shape))
+        # logger.info('pred tail shape: {}'.format(pred_tail.shape))
+        # return 1 - F.cosine_similarity(pred_tail.flatten(1,2), true_tail.flatten(1,2))
+        return 1 - F.cosine_similarity(pred_tail, true_tail)
 
 
     def test_batch(self, batch, pred_tail):
@@ -208,7 +219,6 @@ class Trainer:
             del self.train_dataset
             gc.collect()
             
-            self.all_ents_embs = get_tails(self.all_dataset)
 
             # if self.test_dataset =  
             self.all_dataset = KGEDataSet(
@@ -218,8 +228,11 @@ class Trainer:
                     self.args.valid_path
                 ]
             )
+
+            self.all_ents_embs = get_tails(self.all_dataset)
+
             
-            self.test_dataset = KGEDataSet(paths=[self.args.test_path])
+            self.test_dataset = KGEDataSet(paths=[self.args.test_path], inverse=False)
             metrics = self.test_step(self.test_dataset)
             
             del self.test_dataset
@@ -228,7 +241,7 @@ class Trainer:
             json.dump(metrics, open('train_metrics.json', 'w'))
 
         elif self.args.task == 'test':
-            self.test_dataset = KGEDataSet(paths=[self.args.test_path])
+            self.test_dataset = KGEDataSet(paths=[self.args.test_path], inverse=False)
 
             # if self.test_dataset =  
             self.all_dataset = KGEDataSet(
@@ -252,7 +265,7 @@ class Trainer:
 
 
         elif self.args.task == 'valid':
-            self.valid_dataset = KGEDataSet(paths=[self.args.valid_path])
+            self.valid_dataset = KGEDataSet(paths=[self.args.valid_path], inverse=False)
             logger.info('***Loading checkpoint***')
             self.model, self.optimizer = load_model(epoch=None, model=self.model, optimizer=self.optimizer)
             metrics = self.test_step(self.valid_dataset)

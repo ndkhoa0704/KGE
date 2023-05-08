@@ -5,18 +5,16 @@ import os
 from logger_config import logger
 import torch
 from copy import deepcopy
-from utils import move_to_cuda, move_to_cpu
+from utils import move_to_cuda, move_to_cpu, rowwise_in
 from arguments import args as main_args
+import numpy as np
 
 
 BERT_EMBEDDER = None
 
 ENT_DESC = None
 
-
-# Dataset definitions
-
-
+    
 def get_ent_desc():
     global ENT_DESC
     if ENT_DESC:
@@ -81,10 +79,13 @@ class BertEmbedder:
         self.model_class = BertModel
         self.tokenizer = self.tokenizer_class.from_pretrained(pretrained_weights)
         self.use_cuda = main_args.use_cuda
-        self.hr_model = self.model_class.from_pretrained(pretrained_weights)
+        self.hr_model = self.model_class.from_pretrained(pretrained_weights, output_hidden_states=True)
         # self.h_model = self.model_class.from_pretrained(pretrained_weights)
         # self.r_model = self.model_class.from_pretrained(pretrained_weights)
         self.t_model = deepcopy(self.hr_model)
+
+        self.hr_model.eval()
+        self.t_model.eval()
 
         if self.use_cuda:
             # self.h_model = self.h_model.to('cuda')
@@ -111,16 +112,30 @@ class BertEmbedder:
             r_token_ids = move_to_cuda(r_token_ids)
             t_token_ids = move_to_cuda(t_token_ids)
 
+        # print(h_token_ids.shape)
         logger.info('***Geting embedding***')
 
+        # segment_tensor = torch.tensor([[1] * len(h_token_ids)] * len(examples))
         with torch.no_grad():
-            h_last_hidden_states = self.hr_model(h_token_ids)[0]  # Models outputs are now tuples
-            r_last_hidden_states = self.hr_model(r_token_ids)[0]
-            t_last_hidden_states = self.t_model(t_token_ids)[0]
-            
+            # h_last_hidden_states = torch.stack(self.hr_model(h_token_ids)[2])  # Models outputs are now tuples
+            # r_last_hidden_states = torch.stack(self.hr_model(r_token_ids)[2])
+            # t_last_hidden_states = torch.stack(self.t_model(t_token_ids)[2])
+
+
+            h_last_hidden_states = self.hr_model(h_token_ids)[2][-2] # Models outputs are now tuples
+            r_last_hidden_states = self.hr_model(r_token_ids)[2][-2]
+            t_last_hidden_states = self.t_model(t_token_ids)[2][-2]
+
+            h_last_hidden_states = torch.mean(h_last_hidden_states, dim=1)
+            r_last_hidden_states = torch.mean(r_last_hidden_states, dim=1)
+            t_last_hidden_states = torch.mean(t_last_hidden_states, dim=1)
+
+
             h_last_hidden_states = move_to_cpu(h_last_hidden_states)
             r_last_hidden_states = move_to_cpu(r_last_hidden_states)
             t_last_hidden_states = move_to_cpu(t_last_hidden_states)
+
+            
 
         # logger.info('h emb shape {}'.format(h_last_hidden_states.shape))
         # logger.info('r emb shape {}'.format(r_last_hidden_states.shape))
@@ -154,6 +169,30 @@ class BertEmbedder:
 
         # logger.info('batch size: {}'.format())
         return embeddings
+    
+    def get_ent_emb(self, examples) -> dict:
+
+        features = convert_examples_to_features(examples, self.tokenizer, max_word_len=self.max_word_len)
+        t_token_ids = torch.tensor(list(set(tuple([f['t_token_id'] for f in features]))), dtype=torch.long)
+        print(t_token_ids.shape)
+        exit()
+
+        if self.use_cuda:
+            t_token_ids = move_to_cuda(t_token_ids)
+
+        # print(h_token_ids.shape)
+        logger.info('***Geting embedding***')
+
+        # segment_tensor = torch.tensor([[1] * len(h_token_ids)] * len(examples))
+        with torch.no_grad():
+            t_last_hidden_states = self.t_model(t_token_ids)[2][-2]
+            t_last_hidden_states = torch.mean(t_last_hidden_states, dim=1)
+            t_last_hidden_states = move_to_cpu(t_last_hidden_states)
+
+        embeddings = move_to_cuda(t_last_hidden_states)
+
+        # logger.info('batch size: {}'.format())
+        return embeddings
 
     
 
@@ -166,10 +205,14 @@ def get_bert_embedder():
 
 def _truncate_and_padding_embedding(word: list, max_len) -> torch.tensor:
     '''Truncate or add padding to each entity/relation embedding'''
-    if len(word) > max_len:
-        return word[:max_len]
-    elif len(word) < max_len:
-        return word + ['[PAD]'] * (max_len - len(word))
+    # print(word)
+    word = ['[CLS]'] + word
+    if len(word) > max_len - 1:
+        return word[:max_len - 1] + ['[SEP]']
+    elif len(word) < max_len - 1:
+        return word + ['[PAD]'] * (max_len - len(word) - 1) + ['[SEP]']
+    word += ['[SEP]']
+    # print(word)
     return word
 
 
@@ -190,17 +233,17 @@ def convert_examples_to_features(
             logger.info("Writing example %d of %d" % (i, len(examples)))
         token_h = tokenizer.tokenize(example.head) + tokenizer.tokenize(example.head_desc)
         token_r = tokenizer.tokenize(example.relation)
-        # token_t = tokenizer.tokenize(example.tail) + tokenizer.tokenize(example.tail_desc)
-        token_t = tokenizer.tokenize(example.tail)
+        token_t = tokenizer.tokenize(example.tail) + tokenizer.tokenize(example.tail_desc)
+        # token_t = tokenizer.tokenize(example.tail)
 
 
         token_h = _truncate_and_padding_embedding(token_h, max_len=max_word_len)
         token_r = _truncate_and_padding_embedding(token_r, max_len=max_word_len)
         token_t = _truncate_and_padding_embedding(token_t, max_len=max_word_len)
 
-        tokenized_h = tokenizer.convert_tokens_to_ids(token_h)
-        tokenized_r = tokenizer.convert_tokens_to_ids(token_r)
-        tokenized_t = tokenizer.convert_tokens_to_ids(token_t)
+        tokenized_h = tuple(tokenizer.convert_tokens_to_ids(token_h))
+        tokenized_r = tuple(tokenizer.convert_tokens_to_ids(token_r))
+        tokenized_t = tuple(tokenizer.convert_tokens_to_ids(token_t))
 
 
         features.append({
@@ -243,16 +286,30 @@ def load_data(path, inverse=True):
                 head=data[i]['tail'],
                 relation='inverse ' + data[i]['relation'],
                 tail=data[i]['head'],
-                head_desc=ent_descr[data[i]['head_id']],
-                tail_desc=ent_descr[data[i]['tail_id']]
+                head_desc=ent_descr[data[i]['tail_id']],
+                tail_desc=ent_descr[data[i]['head_id']]
             ))
         data[i] = None
     return examples
 
 
-def collate(batch_data, **kwargs) -> list:
+def collate(batch_data, prebatch_ent=None, **kwargs) -> list:
     embedder = get_bert_embedder()
-    return embedder.get_bert_embeddings(batch_data, *kwargs)
+    neg_samp = None
+    embs = embedder.get_bert_embeddings(batch_data, *kwargs)
+
+    for triple in embs:
+        if neg_samp is None:
+            neg_samp = torch.cat(triple[0, :], triple[:-1,:], dim=0)
+            print(neg_samp.shape)
+            exit()
+        if prebatch_ent:
+            neg_samp.append(torch.cat((triple[-1,:], rowwise_in(triple[2, :], prebatch_ent)), dim=0))
+
+
+def collate_entity(batch_data, **kwargs) -> list:
+    embedder = get_bert_embedder()
+    return embedder.get_ent_emb(batch_data, *kwargs)
 
 
 class KGEDataSet(Dataset):
