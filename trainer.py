@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from logger_config import logger
 import json
 import gc
+from info_nce import InfoNCE
 
 
 @torch.no_grad()
@@ -39,6 +40,8 @@ class Trainer:
         self.model = model(768)
         logger.info(self.model)
         self._setup_training()
+        
+        self.loss = InfoNCE()
 
         # self.train_dataset = KGEDataSet(train_path=self.args.train_path)
         # self.test_dataset = KGEDataSet(test_path=self.args.test_path)
@@ -159,7 +162,7 @@ class Trainer:
         # logger.info('true tail shape: {}'.format(true_tail.shape))
         # logger.info('pred tail shape: {}'.format(pred_tail.shape))
         # return 1 - F.cosine_similarity(pred_tail.flatten(1,2), true_tail.flatten(1,2))
-        return 1 - F.cosine_similarity(pred_tail, true_tail)
+        return F.cosine_similarity(pred_tail, true_tail)
 
 
     def test_batch(self, batch, pred_tail):
@@ -186,17 +189,16 @@ class Trainer:
         self.model.train()
         self.optimizer.zero_grad()
         scores = []
-        for batch in train_data_loader:
+        for pos, neg in train_data_loader:
             # if self.args.use_cuda and torch.cuda.is_available():
             #     batch = move_to_cuda(batch)
             
-            logger.info('Batch size {}'.format(batch.shape))
-            tail = self.model(batch[:, 0, :], batch[:, 1, :])
+            logger.info('Batch size {}'.format(pos.shape))
+            pos_tail = self.model(pos[:, 0, :], pos[:, 1, :])
 
-            score = self.score_fn(batch[:, 2, :], tail)
+            neg_tail = self.model(pos[:, 0, :], neg[:, 1, :])
 
-            loss = score.mean()
-            scores.append(loss)
+            loss = self.loss(pos, pos_tail, neg_tail)
 
             loss.backward()
             self.optimizer.step()

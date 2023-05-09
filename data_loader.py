@@ -293,18 +293,32 @@ def load_data(path, inverse=True):
     return examples
 
 
-def collate(batch_data, prebatch_ent=None, **kwargs) -> list:
+def collate(batch_data, pb=None, **kwargs) -> list:
     embedder = get_bert_embedder()
     neg_samp = None
     embs = embedder.get_bert_embeddings(batch_data, *kwargs)
-
+    pb = torch.rand((512, 3, 768))
     for triple in embs:
+        # Self negatives
         if neg_samp is None:
-            neg_samp = torch.cat(triple[0, :], triple[:-1,:], dim=0)
-            print(neg_samp.shape)
-            exit()
-        if prebatch_ent:
-            neg_samp.append(torch.cat((triple[-1,:], rowwise_in(triple[2, :], prebatch_ent)), dim=0))
+            neg_samp = torch.unsqueeze(torch.cat((torch.unsqueeze(triple[0, :], 0), triple[:-1,:]), dim=0), 1)
+        else: 
+            neg_samp = torch.cat((
+                neg_samp, 
+                torch.unsqueeze(torch.cat((torch.unsqueeze(triple[0, :], 0), triple[:-1,:]), dim=0), 1)
+            ))
+        # Pre-batch
+        if pb is not None: # 
+            print(triple[:-1,:].shape)
+            tmp = torch.cat((triple[:-1,:].expand((1024, *triple[:-1,:].shape)), \
+                             pb[:, 2, :][rowwise_in(pb[:, 2, :], torch.unsqueeze(triple[2, :], 0))].unsqueeze(1)), dim=0)
+            print(tmp.shape)
+            neg_samp = torch.cat((neg_samp, tmp))
+        # In-batch
+        tmp = torch.cat((triple[:-1,:].expand((1024, *triple[:-1,:].shape)), \
+                            embs[:, 2, :][rowwise_in(embs[:, 2, :], torch.unsqueeze(triple[2, :], 0))].unsqueeze(1)), dim=0)
+    return embs, neg_samp
+
 
 
 def collate_entity(batch_data, **kwargs) -> list:
