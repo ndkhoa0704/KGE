@@ -1,18 +1,19 @@
 import torch
 from torch.utils.data import DataLoader
-from data_loader import KGEDataSet, collate, collate_entity
+from data_loader import KGEDataSet, collate, collate_entity, Collator
 from utils import move_to_cuda, save_model, load_model, move_to_cpu, all_axis
 import torch.nn.functional as F
 from logger_config import logger
 import json
 import gc
 from info_nce import InfoNCE
+from functools import partial
 
 
 @torch.no_grad()
 def get_tails(dataset, batch_size=512):
     all_entities = []
-    for batch in DataLoader(dataset, batch_size, collate_fn=collate):
+    for batch, _ in DataLoader(dataset, batch_size, collate_fn=partial(collate, task='All ent')):
         all_entities.append(move_to_cpu(batch[:, 2, :]))
 
     all_entities = torch.cat(list(all_entities), dim=0)
@@ -41,7 +42,9 @@ class Trainer:
         logger.info(self.model)
         self._setup_training()
         
-        self.loss = InfoNCE()
+        # self.loss = InfoNCE()
+        # self.loss = torch.nn.CrossEntropyLoss()
+        self.loss = torch.nn.MarginRankingLoss(margin=self.args.margin)
 
         # self.train_dataset = KGEDataSet(train_path=self.args.train_path)
         # self.test_dataset = KGEDataSet(test_path=self.args.test_path)
@@ -78,7 +81,7 @@ class Trainer:
         dataloader =  DataLoader(
             dataset=DataSet,
             batch_size=self.args.batch_size,
-            collate_fn=collate
+            collate_fn=partial(collate, task='test')
         )
 
         # ent_dataloader = DataLoader(
@@ -94,7 +97,7 @@ class Trainer:
         total_steps = len(dataloader)
 
         with torch.no_grad():
-            for batch in dataloader: 
+            for batch, _ in dataloader: 
                 # if self.args.use_cuda and torch.cuda.is_available():
                 #     batch = move_to_cuda(batch)
 
@@ -122,13 +125,10 @@ class Trainer:
                     #         score = torch.cat((score, batch_score))
                     true_tail = batch[i, 2, :]
                     score = self.score_fn(pred_tail.reshape(1, *pred_tail.shape), self.all_ents_embs)
-                    print(score.shape)
                     argsort = torch.argsort(score, dim = 0, descending=False)
-                    print(argsort)
                     ents = torch.index_select(self.all_ents_embs, 0, argsort)
                     # one_tail = move_to_cpu(one_tail)
                     ranking = all_axis(ents == true_tail).nonzero()
-                    print(ranking.shape)
                     assert ranking.size(0) == 1
 
                     #ranking + 1 is the true ranking used in evaluation metrics
@@ -162,7 +162,8 @@ class Trainer:
         # logger.info('true tail shape: {}'.format(true_tail.shape))
         # logger.info('pred tail shape: {}'.format(pred_tail.shape))
         # return 1 - F.cosine_similarity(pred_tail.flatten(1,2), true_tail.flatten(1,2))
-        return F.cosine_similarity(pred_tail, true_tail)
+        # return F.cosine_similarity(pred_tail, true_tail)
+        return torch.mean(1 - F.cosine_similarity(pred_tail, true_tail))
 
 
     def test_batch(self, batch, pred_tail):
@@ -179,42 +180,102 @@ class Trainer:
         
 
     def train_epoch(self, epoch):
+
+        collator = Collator()
         train_data_loader = DataLoader(
             self.train_dataset,
             shuffle=True,
-            collate_fn=collate,
+            collate_fn=partial(collator, task='train'),
             batch_size=self.args.batch_size
         )
-
-        self.model.train()
         self.optimizer.zero_grad()
-        scores = []
-        for pos, neg in train_data_loader:
+        for batch in train_data_loader:
             # if self.args.use_cuda and torch.cuda.is_available():
             #     batch = move_to_cuda(batch)
             
-            logger.info('Batch size {}'.format(pos.shape))
-            pos_tail = self.model(pos[:, 0, :], pos[:, 1, :])
+            # logger.info('Batch size {}'.format(pos.shape))
+            # pos_tail = self.model(pos[:, 0, :], pos[:, 1, :])
+            # neg_tail = self.model(neg[:, 0, :], neg[:, 1, :])
 
-            neg_tail = self.model(pos[:, 0, :], neg[:, 1, :])
+            # pos_loss = self.score_fn(pos[:, 2, :], pos_tail)
+            # neg_loss = self.score_fn(neg[:, 2, :], neg_tail)
+            # loss = self.loss(pos[:, 2, :], pos_tail, neg_tail)
+            # loss = self.loss(pos_score, neg_score)
+            pos_losses = []
+            neg_losses = []
+            for data in batch:
+                predicted_tail = self.model(data['pos'][:, 0, :], data['pos'][:, 1, :])
+                pos_loss = self.score_fn(data['pos'][:, 2, :], predicted_tail)
+                neg_loss = self.score_fn(data['neg'], predicted_tail)
+                
+                # if pos_losses is None:
+                #     pos_losses = pos_loss
+                # else: 
+                #     pos_losses = torch.cat((pos_losses, pos_loss))
+                # if neg_losses is None:
+                #     neg_losses = neg_loss
+                # else:
+                #     neg_losses = torch.cat((neg_losses, neg_loss))
+                
+                # logger.info(pos_losses.shape)
+                # logger.info(neg_losses.shape)
 
-            loss = self.loss(pos, pos_tail, neg_tail)
+                pos_losses.append(pos_loss)
+                neg_losses.append(neg_loss)
+
+
+            pos_losses = torch.tensor(pos_losses, requires_grad=True)
+            neg_losses = torch.tensor(neg_losses, requires_grad=True)
+
+
+            neg = (self.args.margin - neg_losses).apply_(lambda x: x if x > 0 else 0)
+
+            # loss = torch.mean(torch.cat((pos_losses,torch.tensor(t, requires_grad=True))))
+            loss = torch.mean(torch.cat((pos_losses,neg)))
+
+            # logger.info('Positive loss: {}'.format(pos_loss))
+            # logger.info('Negative loss: {}'.format(neg_loss))
+
+            # t = []
+            # for i in neg_loss:
+            #     if self.args.margin - i < 0:
+            #         t.append(0)
+            #     else: t.append(self.args.margin - i)
+            # t1 = torch.mean(torch.tensor(t))
+            # # self.loss(pos_tail, neg_tail)
+            # loss = (pos_loss + neg.shape[0]*t1) / (neg.shape[0] + 1)
+            
+
+
+            
+
+            # t = - torch.sum(torch.log(pos_loss))
+            # t1 = - torch.sum(torch.log(1 - neg_loss))
+            # print(t1)
+            # print(t)
+            # print(torch.log(pos_loss))
+            # loss = t + t1
+            logger.info('Positive loss: {}'.format(pos_losses))
+            logger.info('Negative loss: {}'.format(neg_losses))
+            logger.info('All loss: {}'.format(loss))
 
             loss.backward()
             self.optimizer.step()
 
             logger.info('Epoch: {} - loss: {}'.format(epoch, loss))
-        return torch.tensor(scores).mean()
+
+        return loss
 
 
     def train_loop(self):
         if self.args.task == 'train':
+            self.model.train()
             # if self.train_dataset is None:
             self.train_dataset = KGEDataSet(paths=[self.args.train_path])
             best_score = None
             for i in range(self.args.no_epoch):
                 score = self.train_epoch(i)
-                if best_score is None or best_score > score:
+                if best_score is None or best_score < score:
                     save_model(i, self.model, self.optimizer, best=True)
                     best_score = score
 
@@ -243,6 +304,7 @@ class Trainer:
             json.dump(metrics, open('train_metrics.json', 'w'))
 
         elif self.args.task == 'test':
+            self.model.eval()
             self.test_dataset = KGEDataSet(paths=[self.args.test_path], inverse=False)
 
             # if self.test_dataset =  

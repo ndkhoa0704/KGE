@@ -1,3 +1,4 @@
+from typing import Any
 from transformers import BertModel, BertTokenizer
 from torch.utils.data import Dataset, DataLoader
 import json
@@ -8,6 +9,7 @@ from copy import deepcopy
 from utils import move_to_cuda, move_to_cpu, rowwise_in
 from arguments import args as main_args
 import numpy as np
+from dataclasses import dataclass
 
 
 BERT_EMBEDDER = None
@@ -99,8 +101,7 @@ class BertEmbedder:
         self.max_seq_len = 3*main_args.max_word_len # h + r + t
 
 
-    def get_bert_embeddings(self, examples) -> dict:
-
+    def get_bert_embeddings(self, examples, task=None) -> dict:
         features = convert_examples_to_features(examples, self.tokenizer, max_word_len=self.max_word_len)
         
         h_token_ids = torch.tensor([f['h_token_id'] for f in features], dtype=torch.long)
@@ -113,7 +114,7 @@ class BertEmbedder:
             t_token_ids = move_to_cuda(t_token_ids)
 
         # print(h_token_ids.shape)
-        logger.info('***Geting embedding***')
+        logger.info('***Getting embedding for {}***'.format(task))
 
         # segment_tensor = torch.tensor([[1] * len(h_token_ids)] * len(examples))
         with torch.no_grad():
@@ -131,9 +132,9 @@ class BertEmbedder:
             t_last_hidden_states = torch.mean(t_last_hidden_states, dim=1)
 
 
-            h_last_hidden_states = move_to_cpu(h_last_hidden_states)
-            r_last_hidden_states = move_to_cpu(r_last_hidden_states)
-            t_last_hidden_states = move_to_cpu(t_last_hidden_states)
+            # h_last_hidden_states = move_to_cpu(h_last_hidden_states)
+            # r_last_hidden_states = move_to_cpu(r_last_hidden_states)
+            # t_last_hidden_states = move_to_cpu(t_last_hidden_states)
 
             
 
@@ -165,9 +166,11 @@ class BertEmbedder:
         # logger.info('r emb shape {}'.format(embeddings['relation'].shape))
         # logger.info('t emb shape {}'.format(embeddings['tail'].shape))
 
-        embeddings = move_to_cuda(torch.stack((h_last_hidden_states, r_last_hidden_states, t_last_hidden_states), dim=1))
+        # embeddings = move_to_cuda(torch.stack((h_last_hidden_states, r_last_hidden_states, t_last_hidden_states), dim=1))
+        embeddings = torch.stack((h_last_hidden_states, r_last_hidden_states, t_last_hidden_states))
 
         # logger.info('batch size: {}'.format())
+        embeddings = torch.permute(embeddings, (1, 0, 2))
         return embeddings
     
     def get_ent_emb(self, examples) -> dict:
@@ -293,37 +296,89 @@ def load_data(path, inverse=True):
     return examples
 
 
-def collate(batch_data, pb=None, **kwargs) -> list:
+# def collate(batch_data, task, pb=None) -> list:
+#     embedder = get_bert_embedder()
+#     neg_samp = None
+#     embs = embedder.get_bert_embeddings(batch_data, task) 
+#     for triple in embs:
+#         hr = triple[:-1,:]
+#         h = torch.unsqueeze(triple[0, :], 0)
+#         # Self negatives
+#         if neg_samp is None:
+#             neg_samp = torch.unsqueeze(torch.cat((hr, h), dim=0), dim=0)
+#         else: 
+#             tmp = torch.unsqueeze(torch.cat((hr, h), dim=0), dim=0)
+#             neg_samp = torch.cat((neg_samp, tmp), dim=0)
+#         # Pre-batch
+#         if pb is not None: # 
+#             t2 = torch.unsqueeze(pb[:, 2, :][rowwise_in(pb[:, 2, :], torch.unsqueeze(triple[2, :], 0))], dim=1)
+#             t1 = hr.expand((t2.shape[0], *hr.shape))
+#             # print(t1.shape)
+#             # print(t2.shape)
+#             tmp = torch.cat((t1, t2), dim=1)
+#             # print(tmp.shape)
+#             # print(neg_samp.shape)
+#             neg_samp = torch.cat((neg_samp, tmp), dim=0)
+#         # In-batch
+#         t2 =  torch.unsqueeze(embs[:, 2, :][rowwise_in(embs[:, 2, :], torch.unsqueeze(triple[2, :], 0))], dim=1)
+#         t1 = hr.expand((t2.shape[0], *hr.shape))
+#         tmp = torch.cat((t1, t2), dim=1)
+#     return embs, neg_samp
+
+
+def collate(batch_data, task, pb=None) -> list:
+    '''
+    pos_samp: (batch_size, 3, 768)
+    neg_samp: (batch_size, 1, 768)
+    '''
     embedder = get_bert_embedder()
-    neg_samp = None
-    embs = embedder.get_bert_embeddings(batch_data, *kwargs)
-    pb = torch.rand((512, 3, 768))
+    embs = embedder.get_bert_embeddings(batch_data, task)
+
+    batch = []
     for triple in embs:
+        neg_samp = None
         # Self negatives
+        h = torch.unsqueeze(torch.unsqueeze(triple[0, :], 0), 0)
         if neg_samp is None:
-            neg_samp = torch.unsqueeze(torch.cat((torch.unsqueeze(triple[0, :], 0), triple[:-1,:]), dim=0), 1)
-        else: 
-            neg_samp = torch.cat((
-                neg_samp, 
-                torch.unsqueeze(torch.cat((torch.unsqueeze(triple[0, :], 0), triple[:-1,:]), dim=0), 1)
-            ))
+            neg_samp = h
+        else:
+            neg_samp = torch.cat((neg_samp, h))
         # Pre-batch
         if pb is not None: # 
-            print(triple[:-1,:].shape)
-            tmp = torch.cat((triple[:-1,:].expand((1024, *triple[:-1,:].shape)), \
-                             pb[:, 2, :][rowwise_in(pb[:, 2, :], torch.unsqueeze(triple[2, :], 0))].unsqueeze(1)), dim=0)
-            print(tmp.shape)
-            neg_samp = torch.cat((neg_samp, tmp))
+            pb_tail = torch.cat([i['pos'] for i in pb])[:, 2, :]
+            pb_tail = torch.unsqueeze(pb_tail, dim=1)
+            # print('pb_tail: {}'.format(pb_tail.shape))
+            # ts = torch.unsqueeze(pb['neg'][rowwise_in(pb['neg'], torch.unsqueeze(triple[2, :], 0))], dim=1)
+            neg_samp = torch.cat((neg_samp, pb_tail))
         # In-batch
-        tmp = torch.cat((triple[:-1,:].expand((1024, *triple[:-1,:].shape)), \
-                            embs[:, 2, :][rowwise_in(embs[:, 2, :], torch.unsqueeze(triple[2, :], 0))].unsqueeze(1)), dim=0)
-    return embs, neg_samp
+        # print(triple.shape)
+        # print(embs.shape)
+        ts = torch.unsqueeze(embs[:, 2, :][rowwise_in(embs[:, 2, :], torch.unsqueeze(triple[2, :], 0))], dim=1)
+        # print('ts: {}'.format(ts.shape))
+        # print('neg_samp: {}'.format(neg_samp.shape))
+        neg_samp = torch.cat((neg_samp, ts))
+        batch.append({'pos': torch.unsqueeze(triple, 0), 'neg': neg_samp})
+    return batch
 
 
 
 def collate_entity(batch_data, **kwargs) -> list:
     embedder = get_bert_embedder()
     return embedder.get_ent_emb(batch_data, *kwargs)
+
+
+class Collator:
+    def __init__(self):
+        self.prebatch = None
+    def __call__(self, batch_data, task) -> Any:
+        if self.prebatch is None:
+            collated_data = collate(batch_data, task)
+            self.prebatch = collated_data
+            return collated_data
+        else:
+            collated_data = collate(batch_data, task, self.prebatch)
+            self.prebatch = collated_data
+            return collated_data
 
 
 class KGEDataSet(Dataset):

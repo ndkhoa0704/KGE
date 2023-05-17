@@ -14,5 +14,6 @@ parser.add_argument('--learning-rate', dest='lr', default=0.05, type=float)
 parser.add_argument('--use-cuda', dest='use_cuda', default=True)
 parser.add_argument('--test-log-steps', dest='test_log_steps', default=10, type=int)
 parser.add_argument('--task', dest='task')
+parser.add_argument('--margin', dest='margin', type=float)
     
 args = parser.parse_args()
