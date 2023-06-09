@@ -1,4 +1,5 @@
 import logging
+from arguments import args
 
 
 # def _setup_logger():
@@ -18,7 +19,14 @@ def _setup_logger():
     logger.setLevel(logging.INFO)
 
     # Create a file handler
-    file_handler = logging.FileHandler("log.log")
+
+    if args.task == 'train':
+        log_file = 'train.log'
+    elif args.task == 'test':
+        log_file = 'test.log'
+    elif args.task == 'eval':
+        log_file = 'eval.log'
+    file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(log_format)
 
     console_handler = logging.StreamHandler()

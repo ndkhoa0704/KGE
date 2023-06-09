@@ -21,8 +21,10 @@ class CustomTransSmth(nn.Module):
     def __init__(self, dim, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dim = dim
-        self.wr = nn.Parameter(torch.eye(self.dim), requires_grad=True)
-        self.wh = nn.Parameter(torch.eye(self.dim), requires_grad=True)
+        self.wr = nn.Parameter(torch.eye(self.dim*4), requires_grad=True)
+        self.wh = nn.Parameter(torch.eye(self.dim*4), requires_grad=True)
+        # self.wr = nn.Parameter(torch.ones((self.dim*4, self.dim*4)), requires_grad=True)
+        # self.wh = nn.Parameter(torch.ones((self.dim*4, self.dim*4)), requires_grad=True)
         self.bias = nn.Parameter(torch.rand((1,)), requires_grad=True)
 
         # self.linearH = nn.Linear(self.dim, self.dim)
@@ -38,7 +40,7 @@ class CustomTransSmth(nn.Module):
         # h = torch.relu(h)
         # r = self.linearR(r)
         # r = torch.relu(r)        
-        t = h@self.wh +  r@self.wr + self.bias
-        t = F.logsigmoid(t)
-
+        t = h@self.wh + r@self.wr + self.bias
+        # t = F.logsigmoid(t)
+        t = F.sigmoid(t)
         return t

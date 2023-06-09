@@ -123,13 +123,26 @@ class BertEmbedder:
             # t_last_hidden_states = torch.stack(self.t_model(t_token_ids)[2])
 
 
-            h_last_hidden_states = self.hr_model(h_token_ids)[2][-2] # Models outputs are now tuples
-            r_last_hidden_states = self.hr_model(r_token_ids)[2][-2]
-            t_last_hidden_states = self.t_model(t_token_ids)[2][-2]
+            # h_last_hidden_states = self.hr_model(h_token_ids)[2][-2] # Models outputs are now tuples
+            # r_last_hidden_states = self.hr_model(r_token_ids)[2][-2]
+            # t_last_hidden_states = self.t_model(t_token_ids)[2][-2]
 
-            h_last_hidden_states = torch.mean(h_last_hidden_states, dim=1)
-            r_last_hidden_states = torch.mean(r_last_hidden_states, dim=1)
-            t_last_hidden_states = torch.mean(t_last_hidden_states, dim=1)
+            h_last_hidden_states = self.hr_model(h_token_ids)[2] # Models outputs are now tuples
+            r_last_hidden_states = self.hr_model(r_token_ids)[2]
+            t_last_hidden_states = self.t_model(t_token_ids)[2]
+
+        h_last_hidden_states = [h_last_hidden_states[i] for i in (-1, -2, -3, -4)]
+        r_last_hidden_states = [r_last_hidden_states[i] for i in (-1, -2, -3, -4)]
+        t_last_hidden_states = [t_last_hidden_states[i] for i in (-1, -2, -3, -4)]
+
+        h_last_hidden_states = torch.cat(tuple(h_last_hidden_states), dim=-1)
+        r_last_hidden_states = torch.cat(tuple(r_last_hidden_states), dim=-1)
+        t_last_hidden_states = torch.cat(tuple(t_last_hidden_states), dim=-1)
+
+
+        h_last_hidden_states = torch.mean(h_last_hidden_states, dim=1)
+        r_last_hidden_states = torch.mean(r_last_hidden_states, dim=1)
+        t_last_hidden_states = torch.mean(t_last_hidden_states, dim=1)
 
 
             # h_last_hidden_states = move_to_cpu(h_last_hidden_states)
@@ -169,8 +182,8 @@ class BertEmbedder:
         # embeddings = move_to_cuda(torch.stack((h_last_hidden_states, r_last_hidden_states, t_last_hidden_states), dim=1))
         embeddings = torch.stack((h_last_hidden_states, r_last_hidden_states, t_last_hidden_states))
 
-        # logger.info('batch size: {}'.format())
-        embeddings = torch.permute(embeddings, (1, 0, 2))
+        logger.info('batch size: {}'.format(embeddings.shape))
+        # embeddings = torch.permute(embeddings, (1, 0, 2))
         return embeddings
     
     def get_ent_emb(self, examples) -> dict:
