@@ -21,26 +21,22 @@ class CustomTransSmth(nn.Module):
     def __init__(self, dim, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dim = dim
-        self.wr = nn.Parameter(torch.eye(self.dim*4), requires_grad=True)
-        self.wh = nn.Parameter(torch.eye(self.dim*4), requires_grad=True)
-        # self.wr = nn.Parameter(torch.ones((self.dim*4, self.dim*4)), requires_grad=True)
-        # self.wh = nn.Parameter(torch.ones((self.dim*4, self.dim*4)), requires_grad=True)
-        self.bias = nn.Parameter(torch.rand((1,)), requires_grad=True)
+        # self.wr = nn.Parameter(torch.eye(self.dim), requires_grad=True)
+        # self.wh = nn.Parameter(torch.eye(self.dim), requires_grad=True)
+        self.wr = nn.Parameter(torch.ones((self.dim, self.dim)), requires_grad=True)
+        self.wh = nn.Parameter(torch.ones((self.dim, self.dim)), requires_grad=True)
+        self.bias = nn.Parameter(torch.ones((1,)), requires_grad=True)
 
-        # self.linearH = nn.Linear(self.dim, self.dim)
-        # self.linearR = nn.Linear(self.dim, self.dim)
-        # self.linearT = nn.Linear(self.dim, self.dim)
+        self.linearH = nn.Linear(self.dim, self.dim)
+        self.linearR = nn.Linear(self.dim, self.dim)
+        self.linearT = nn.Linear(self.dim, self.dim)
 
 
 
     def forward(self, h, r):
-        # logger.info('Head size: {}'.format(h.shape))
-        # logger.info('Relation size: {}'.format(r.shape))
-        # h = self.linearH(h)
-        # h = torch.relu(h)
-        # r = self.linearR(r)
-        # r = torch.relu(r)        
-        t = h@self.wh + r@self.wr + self.bias
-        # t = F.logsigmoid(t)
+        h = self.linearH(h)
+        r = self.linearR(r)
+        t = torch.matmul(h, self.wh) + torch.matmul(r, self.wr) + self.bias
+        t = self.linearT(t)
         t = F.sigmoid(t)
         return t

@@ -76,24 +76,19 @@ class Example:
 class BertEmbedder:
     def __init__(self):
         super().__init__()
-        pretrained_weights = 'bert-base-uncased'
+        pretrained_weights = "prajjwal1/bert-tiny"
         self.tokenizer_class = BertTokenizer
         self.model_class = BertModel
         self.tokenizer = self.tokenizer_class.from_pretrained(pretrained_weights)
         self.use_cuda = main_args.use_cuda
         self.hr_model = self.model_class.from_pretrained(pretrained_weights, output_hidden_states=True)
-        # self.h_model = self.model_class.from_pretrained(pretrained_weights)
-        # self.r_model = self.model_class.from_pretrained(pretrained_weights)
         self.t_model = deepcopy(self.hr_model)
 
         self.hr_model.eval()
         self.t_model.eval()
 
         if self.use_cuda:
-            # self.h_model = self.h_model.to('cuda')
             self.hr_model = self.hr_model.to('cuda')
-            # self.h_model = self.h_model.to('cuda')
-            # self.r_model = self.r_model.to('cuda')
             self.t_model = self.t_model.to('cuda')
 
 
@@ -123,22 +118,22 @@ class BertEmbedder:
             # t_last_hidden_states = torch.stack(self.t_model(t_token_ids)[2])
 
 
-            # h_last_hidden_states = self.hr_model(h_token_ids)[2][-2] # Models outputs are now tuples
-            # r_last_hidden_states = self.hr_model(r_token_ids)[2][-2]
-            # t_last_hidden_states = self.t_model(t_token_ids)[2][-2]
+            h_last_hidden_states = self.hr_model(h_token_ids)[2][-2] # Models outputs are now tuples
+            r_last_hidden_states = self.hr_model(r_token_ids)[2][-2]
+            t_last_hidden_states = self.t_model(t_token_ids)[2][-2]
 
-            h_last_hidden_states = self.hr_model(h_token_ids)[2] # Models outputs are now tuples
-            r_last_hidden_states = self.hr_model(r_token_ids)[2]
-            t_last_hidden_states = self.t_model(t_token_ids)[2]
+            # h_last_hidden_states = self.hr_model(h_token_ids)[2] # Models outputs are now tuples
+            # r_last_hidden_states = self.hr_model(r_token_ids)[2]
+            # t_last_hidden_states = self.t_model(t_token_ids)[2]
 
-        h_last_hidden_states = [h_last_hidden_states[i] for i in (-1, -2, -3, -4)]
-        r_last_hidden_states = [r_last_hidden_states[i] for i in (-1, -2, -3, -4)]
-        t_last_hidden_states = [t_last_hidden_states[i] for i in (-1, -2, -3, -4)]
+        # h_last_hidden_states = [h_last_hidden_states[i] for i in (-1, -2, -3, -4)]
+        # r_last_hidden_states = [r_last_hidden_states[i] for i in (-1, -2, -3, -4)]
+        # t_last_hidden_states = [t_last_hidden_states[i] for i in (-1, -2, -3, -4)]
 
-        h_last_hidden_states = torch.cat(tuple(h_last_hidden_states), dim=-1)
-        r_last_hidden_states = torch.cat(tuple(r_last_hidden_states), dim=-1)
-        t_last_hidden_states = torch.cat(tuple(t_last_hidden_states), dim=-1)
-
+        # h_last_hidden_states = torch.cat(tuple(h_last_hidden_states), dim=-1)
+        # r_last_hidden_states = torch.cat(tuple(r_last_hidden_states), dim=-1)
+        # t_last_hidden_states = torch.cat(tuple(t_last_hidden_states), dim=-1)
+        
 
         h_last_hidden_states = torch.mean(h_last_hidden_states, dim=1)
         r_last_hidden_states = torch.mean(r_last_hidden_states, dim=1)
@@ -151,47 +146,17 @@ class BertEmbedder:
 
             
 
-        # logger.info('h emb shape {}'.format(h_last_hidden_states.shape))
-        # logger.info('r emb shape {}'.format(r_last_hidden_states.shape))
-        # logger.info('t emb shape {}'.format(t_last_hidden_states.shape))
-        # exit()
-
-
-        # if self.use_cuda:
-        #     move_to_cpu(h_token_ids)
-        #     move_to_cpu(r_token_ids)
-        #     move_to_cpu(t_token_ids)
-
-        
-        # embeddings = {
-        #     'head': torch.mean(hr_last_hidden_states[:, :main_args.max_word_len, :], dim=1),
-        #     'relation': torch.mean(hr_last_hidden_states[:, main_args.max_word_len:2*main_args.max_word_len, :], dim=1),
-        #     'tail': torch.mean(t_last_hidden_states[:, -main_args.max_word_len:, :], dim=1)
-        # }
-
-        # embeddings = {
-        #     'head': h_last_hidden_states,
-        #     'relation': r_last_hidden_states,
-        #     'tail': t_last_hidden_states
-        # }
-
-        # logger.info('h emb shape {}'.format(embeddings['head'].shape))
-        # logger.info('r emb shape {}'.format(embeddings['relation'].shape))
-        # logger.info('t emb shape {}'.format(embeddings['tail'].shape))
-
         # embeddings = move_to_cuda(torch.stack((h_last_hidden_states, r_last_hidden_states, t_last_hidden_states), dim=1))
         embeddings = torch.stack((h_last_hidden_states, r_last_hidden_states, t_last_hidden_states))
+        embeddings = torch.permute(embeddings, (1, 0, 2))
 
         logger.info('batch size: {}'.format(embeddings.shape))
-        # embeddings = torch.permute(embeddings, (1, 0, 2))
         return embeddings
     
     def get_ent_emb(self, examples) -> dict:
 
         features = convert_examples_to_features(examples, self.tokenizer, max_word_len=self.max_word_len)
         t_token_ids = torch.tensor(list(set(tuple([f['t_token_id'] for f in features]))), dtype=torch.long)
-        print(t_token_ids.shape)
-        exit()
 
         if self.use_cuda:
             t_token_ids = move_to_cuda(t_token_ids)
@@ -266,8 +231,6 @@ def convert_examples_to_features(
             'h_token_id': tokenized_h,
             'r_token_id': tokenized_r,
             't_token_id': tokenized_t
-            # 'hr_token_id': tokens[:2*max_word_len],
-            # 'rt_token_id': tokens[max_word_len:],
         })
 
         examples[i] = None
@@ -309,36 +272,6 @@ def load_data(path, inverse=True):
     return examples
 
 
-# def collate(batch_data, task, pb=None) -> list:
-#     embedder = get_bert_embedder()
-#     neg_samp = None
-#     embs = embedder.get_bert_embeddings(batch_data, task) 
-#     for triple in embs:
-#         hr = triple[:-1,:]
-#         h = torch.unsqueeze(triple[0, :], 0)
-#         # Self negatives
-#         if neg_samp is None:
-#             neg_samp = torch.unsqueeze(torch.cat((hr, h), dim=0), dim=0)
-#         else: 
-#             tmp = torch.unsqueeze(torch.cat((hr, h), dim=0), dim=0)
-#             neg_samp = torch.cat((neg_samp, tmp), dim=0)
-#         # Pre-batch
-#         if pb is not None: # 
-#             t2 = torch.unsqueeze(pb[:, 2, :][rowwise_in(pb[:, 2, :], torch.unsqueeze(triple[2, :], 0))], dim=1)
-#             t1 = hr.expand((t2.shape[0], *hr.shape))
-#             # print(t1.shape)
-#             # print(t2.shape)
-#             tmp = torch.cat((t1, t2), dim=1)
-#             # print(tmp.shape)
-#             # print(neg_samp.shape)
-#             neg_samp = torch.cat((neg_samp, tmp), dim=0)
-#         # In-batch
-#         t2 =  torch.unsqueeze(embs[:, 2, :][rowwise_in(embs[:, 2, :], torch.unsqueeze(triple[2, :], 0))], dim=1)
-#         t1 = hr.expand((t2.shape[0], *hr.shape))
-#         tmp = torch.cat((t1, t2), dim=1)
-#     return embs, neg_samp
-
-
 def collate(batch_data, task, pb=None) -> list:
     '''
     pos_samp: (batch_size, 3, 768)
@@ -360,24 +293,17 @@ def collate(batch_data, task, pb=None) -> list:
         if pb is not None: # 
             pb_tail = torch.cat([i['pos'] for i in pb])[:, 2, :]
             pb_tail = torch.unsqueeze(pb_tail, dim=1)
-            # print('pb_tail: {}'.format(pb_tail.shape))
-            # ts = torch.unsqueeze(pb['neg'][rowwise_in(pb['neg'], torch.unsqueeze(triple[2, :], 0))], dim=1)
             neg_samp = torch.cat((neg_samp, pb_tail))
         # In-batch
-        # print(triple.shape)
-        # print(embs.shape)
         ts = torch.unsqueeze(embs[:, 2, :][rowwise_in(embs[:, 2, :], torch.unsqueeze(triple[2, :], 0))], dim=1)
-        # print('ts: {}'.format(ts.shape))
-        # print('neg_samp: {}'.format(neg_samp.shape))
         neg_samp = torch.cat((neg_samp, ts))
         batch.append({'pos': torch.unsqueeze(triple, 0), 'neg': neg_samp})
     return batch
 
 
-
 def collate_entity(batch_data, **kwargs) -> list:
     embedder = get_bert_embedder()
-    return embedder.get_ent_emb(batch_data, *kwargs)
+    return embedder.get_bert_embeddings(batch_data, *kwargs)
 
 
 class Collator:
@@ -394,6 +320,20 @@ class Collator:
             return collated_data
 
 
+class TestCollator:
+    def __init__(self, all_triples):
+        self.all_triples = all_triples
+        logger.info(all_triples.shape)
+
+    def __call__(self, batch_data, task):
+        embedder = get_bert_embedder()
+        embs = embedder.get_bert_embeddings(batch_data, task)
+        batch = []
+        for triple in embs:
+            batch.append({'pos': torch.unsqueeze(triple, 0), 'neg': self.all_triples})
+        return batch
+        
+
 class KGEDataSet(Dataset):
     def __init__(self, paths: list[str], *args, **kwargs):
         self.examples = []
@@ -408,35 +348,34 @@ class KGEDataSet(Dataset):
         return self.examples[index]
     
 
-class EntitiesDataset(Dataset):
-    def __init__(self, entities):
-        self.ents = entities
-        self.data_len = len(entities)
 
-    def __getitem__(self, index):
-        return self.ents[index]
+
+# class EntitiesDataset(Dataset):
+#     def __init__(self, entities):
+#         self.ents = entities
+#         self.data_len = len(entities)
+
+#     def __getitem__(self, index):
+#         return self.ents[index]
     
-    def __len__(self):
-        return self.data_len
+#     def __len__(self):
+#         return self.data_len
         
 
-def get_all_entities(train_path, test_path, valid_path):
-    all_dataset = KGEDataSet(
-        train_path=train_path,
-        test_path=test_path,
-        valid_path=valid_path
-    )
+# def get_all_entities(train_path, test_path, valid_path):
+#     all_dataset = KGEDataSet(
+#         train_path=train_path,
+#         test_path=test_path,
+#         valid_path=valid_path
+#     )
 
-    all_entities = []
-    for batch in DataLoader(all_dataset, batch_size=main_args.batch_size):
-        # all_entities.append(batch[:, 0, :])
-        all_entities.append(batch[:, 2, :])
+#     all_entities = []
+#     for batch in DataLoader(all_dataset, batch_size=main_args.batch_size):
+#         # all_entities.append(batch[:, 0, :])
+#         all_entities.append(batch[:, 2, :])
 
-    all_entities = torch.cat(list(all_entities), dim=0)
-    # print(all_entities[:5])
-    ents = torch.unique(all_entities, dim=0)
-    # exit()
-    print(ents.shape)
-    # exit()
-    ents = move_to_cpu(ents)
-    return ents
+#     all_entities = torch.cat(list(all_entities), dim=0)
+#     # print(all_entities[:5])
+#     ents = torch.unique(all_entities, dim=0)
+#     ents = move_to_cpu(ents)
+#     return ents

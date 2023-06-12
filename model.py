@@ -130,7 +130,7 @@ class KGEModel(nn.Module):
         elif mode == 'tail-batch':
             head_part, tail_part = sample
             batch_size, negative_sample_size = tail_part.size(0), tail_part.size(1)
-            
+                
             head = torch.index_select(
                 self.entity_embedding, 
                 dim=0, 
@@ -159,7 +159,10 @@ class KGEModel(nn.Module):
             'RotatE': self.RotatE,
             'pRotatE': self.pRotatE
         }
-        
+        print(head.shape)
+        print(relation.shape)
+        print(tail.shape)
+        exit()
         if self.model_name in model_func:
             score = model_func[self.model_name](head, relation, tail, mode)
         else:
@@ -395,7 +398,7 @@ class KGEModel(nn.Module):
 
                         score = model((positive_sample, negative_sample), mode)
                         score += filter_bias
-
+ 
                         #Explicitly sort all the entities to ensure that there is no test exposure bias
                         argsort = torch.argsort(score, dim = 1, descending=True)
 
@@ -405,7 +408,8 @@ class KGEModel(nn.Module):
                             positive_arg = positive_sample[:, 2]
                         else:
                             raise ValueError('mode %s not supported' % mode)
-
+                        print(positive_arg.shape)
+                        exit()
                         for i in range(batch_size):
                             #Notice that argsort is not ranking
                             ranking = (argsort[i, :] == positive_arg[i]).nonzero()
