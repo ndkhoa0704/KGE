@@ -45,6 +45,7 @@ class Example:
         self.h_d = head_desc
         self.t_d = tail_desc
 
+
     @property
     def head(self):
         return _parse_entity(self.h)
@@ -76,7 +77,7 @@ class Example:
 class BertEmbedder:
     def __init__(self):
         super().__init__()
-        pretrained_weights = "prajjwal1/bert-tiny"
+        pretrained_weights = "bert-base-uncased"
         self.tokenizer_class = BertTokenizer
         self.model_class = BertModel
         self.tokenizer = self.tokenizer_class.from_pretrained(pretrained_weights)
@@ -113,9 +114,9 @@ class BertEmbedder:
 
         # segment_tensor = torch.tensor([[1] * len(h_token_ids)] * len(examples))
         with torch.no_grad():
-            # h_last_hidden_states = torch.stack(self.hr_model(h_token_ids)[2])  # Models outputs are now tuples
-            # r_last_hidden_states = torch.stack(self.hr_model(r_token_ids)[2])
-            # t_last_hidden_states = torch.stack(self.t_model(t_token_ids)[2])
+            h_last_hidden_states = torch.stack(self.hr_model(h_token_ids)[2])  # Models outputs are now tuples
+            r_last_hidden_states = torch.stack(self.hr_model(r_token_ids)[2])
+            t_last_hidden_states = torch.stack(self.t_model(t_token_ids)[2])
 
 
             h_last_hidden_states = self.hr_model(h_token_ids)[2][-2] # Models outputs are now tuples
@@ -123,7 +124,7 @@ class BertEmbedder:
             t_last_hidden_states = self.t_model(t_token_ids)[2][-2]
 
             # h_last_hidden_states = self.hr_model(h_token_ids)[2] # Models outputs are now tuples
-            # r_last_hidden_states = self.hr_model(r_token_ids)[2]
+            # r_last_hidden_states = self.hr_model(r_   token_ids)[2]
             # t_last_hidden_states = self.t_model(t_token_ids)[2]
 
         # h_last_hidden_states = [h_last_hidden_states[i] for i in (-1, -2, -3, -4)]
@@ -150,13 +151,13 @@ class BertEmbedder:
         embeddings = torch.stack((h_last_hidden_states, r_last_hidden_states, t_last_hidden_states))
         embeddings = torch.permute(embeddings, (1, 0, 2))
 
-        logger.info('batch size: {}'.format(embeddings.shape))
-        return embeddings
+        # logger.info('batch size: {}'.format(embeddings.shape))
+        return move_to_cuda(embeddings)
     
     def get_ent_emb(self, examples) -> dict:
 
         features = convert_examples_to_features(examples, self.tokenizer, max_word_len=self.max_word_len)
-        t_token_ids = torch.tensor(list(set(tuple([f['t_token_id'] for f in features]))), dtype=torch.long)
+        t_token_ids = torch.tensor([f['t_token_id'] for f in features], dtype=torch.long)
 
         if self.use_cuda:
             t_token_ids = move_to_cuda(t_token_ids)
@@ -168,11 +169,10 @@ class BertEmbedder:
         with torch.no_grad():
             t_last_hidden_states = self.t_model(t_token_ids)[2][-2]
             t_last_hidden_states = torch.mean(t_last_hidden_states, dim=1)
-            t_last_hidden_states = move_to_cpu(t_last_hidden_states)
 
         embeddings = move_to_cuda(t_last_hidden_states)
 
-        # logger.info('batch size: {}'.format())
+        # logger.info('batch size: {}'.format(embeddings.shape))
         return embeddings
 
     
@@ -303,7 +303,7 @@ def collate(batch_data, task, pb=None) -> list:
 
 def collate_entity(batch_data, **kwargs) -> list:
     embedder = get_bert_embedder()
-    return embedder.get_bert_embeddings(batch_data, *kwargs)
+    return embedder.get_ent_emb(batch_data, *kwargs)
 
 
 class Collator:
@@ -346,36 +346,3 @@ class KGEDataSet(Dataset):
     
     def __getitem__(self, index):
         return self.examples[index]
-    
-
-
-
-# class EntitiesDataset(Dataset):
-#     def __init__(self, entities):
-#         self.ents = entities
-#         self.data_len = len(entities)
-
-#     def __getitem__(self, index):
-#         return self.ents[index]
-    
-#     def __len__(self):
-#         return self.data_len
-        
-
-# def get_all_entities(train_path, test_path, valid_path):
-#     all_dataset = KGEDataSet(
-#         train_path=train_path,
-#         test_path=test_path,
-#         valid_path=valid_path
-#     )
-
-#     all_entities = []
-#     for batch in DataLoader(all_dataset, batch_size=main_args.batch_size):
-#         # all_entities.append(batch[:, 0, :])
-#         all_entities.append(batch[:, 2, :])
-
-#     all_entities = torch.cat(list(all_entities), dim=0)
-#     # print(all_entities[:5])
-#     ents = torch.unique(all_entities, dim=0)
-#     ents = move_to_cpu(ents)
-#     return ents
