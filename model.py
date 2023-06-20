@@ -409,7 +409,6 @@ class KGEModel(nn.Module):
                         else:
                             raise ValueError('mode %s not supported' % mode)
                         print(positive_arg.shape)
-                        exit()
                         for i in range(batch_size):
                             #Notice that argsort is not ranking
                             ranking = (argsort[i, :] == positive_arg[i]).nonzero()

@@ -1,12 +1,11 @@
 import torch
 from torch.utils.data import DataLoader
-from data_loader import KGEDataSet, collate_entity, Collator, TestCollator
+from data_loader import KGEDataSet, collate_entity, Collator, TestCollator, collate
 from utils import move_to_cuda, save_model, load_model, move_to_cpu, all_axis
 import torch.nn.functional as F
 from logger_config import logger
 import json
 import gc
-from info_nce import InfoNCE
 from dissimilarities import l2_dissimilarity
 from functools import partial
 
@@ -14,14 +13,17 @@ from functools import partial
 @torch.no_grad()
 def get_tails(dataset, batch_size=512):
     all_entities = []
-    for batch in DataLoader(dataset, batch_size, collate_fn=partial(collate_entity)):
+    all_ent_ids = []
+    ent_ids = set()
+    for batch, ent_id in DataLoader(dataset, batch_size, collate_fn=partial(collate_entity, ent_ids=ent_ids)):
         logger.info('ents shape: {}'.format(batch.shape))
         all_entities.append(batch)
+        all_ent_ids += ent_id
     all_entities = torch.cat(list(all_entities), dim=0)
-    ents = torch.unique(all_entities, dim=0)
-    ents = move_to_cuda(ents)
+    # ents = move_to_cuda(ents)
     gc.collect()
-    return ents
+    logger.info(f'All entity shape: {all_entities.shape}')
+    return all_entities, all_ent_ids
 
 
 class Trainer:
@@ -33,13 +35,21 @@ class Trainer:
         self._setup_training()
 
         self.loss = torch.nn.BCELoss()
+        # self.loss = torch.nn.MarginRankingLoss()
+        # self.loss = torch.nn.Softplus()
 
         self.train_dataset = None
         self.test_dataset = None
         self.valid_dataset = None
-        self.all_dataset = None
+        self.all_dataset = KGEDataSet(
+            paths=[
+                self.args.train_path,
+                self.args.test_path,
+                self.args.valid_path
+            ]
+        )
 
-        self.all_ents_embs = None
+        self.all_ents_embs, self.all_ents_ids = get_tails(self.all_dataset)
         
         self.optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.model.parameters()), 
@@ -77,18 +87,21 @@ class Trainer:
                 predicted_scores = []
                 all_scores = []
                 for data in batch:
+                    # logger.info(data['pos'][:, 0, :].shape)
                     predicted_tail = self.model(data['pos'][:, 0, :], data['pos'][:, 1, :])
                     predicted_scores.append(self.score_fn(data['pos'][:, 2, :], predicted_tail))
                     all_scores.append(self.score_fn(data['neg'].squeeze(1), predicted_tail))
                     
                 for i in range(batch_size):
                     # Notice that argsort is not ranking
-                    # logger.info('predicted_tail shape {}'.format(tail[i].shape))
-                    argsort = torch.argsort(all_scores[i], dim = 0, descending=False)
+                    argsort = torch.argsort(all_scores[i], dim = 0, descending=True)
                     
-                    # logger.info(argsort)
-                    # one_tail = move_to_cpu(one_tail)
-                    ranking = (torch.index_select(all_scores[i],0,argsort) == predicted_scores[i]).nonzero()
+                    argsort = torch.index_select(batch[i]['neg'], 0, argsort)
+                    for j in range(len(batch[i]['neg'])):
+                        if argsort[j].equal(batch[i]['pos'][:, 2, :].squeeze(0)):
+                            ranking = torch.tensor([j])
+                            break
+
                     logger.info(ranking)
                     assert ranking.size(0) == 1
 
@@ -119,33 +132,32 @@ class Trainer:
 
 
     def score_fn(self, true_tail, pred_tail):
-        return 1 - torch.clamp(F.cosine_similarity(true_tail, pred_tail), min=0)
-        # return F.cosine_similarity(true_tail, pred_tail)
+        # return 1 - torch.clamp(F.cosine_similarity(true_tail, pred_tail), min=0)
+        return (F.cosine_similarity(true_tail, pred_tail) + 1)/2
         
 
     def train_epoch(self, epoch):
 
-        collator = Collator()
+        # collator = Collator()
         train_data_loader = DataLoader(
             self.train_dataset,
             shuffle=True,
-            collate_fn=partial(collator, task='train'),
+            collate_fn=partial(collate, task='train'),
             batch_size=self.args.batch_size
         )
         self.optimizer.zero_grad()
-        for batch in train_data_loader:
-
-
+        for batch, h_ids, t_ids in train_data_loader:
             pos_losses = None # 32
             neg_losses = None
             target = []
 
             for data in batch:
-                predicted_tail = self.model(data['pos'][:, 0, :], data['pos'][:, 1, :])
-                pos_loss = self.score_fn(data['pos'][:, 2, :], predicted_tail) # 1
+                predicted_tail = self.model(data.unsqueeze(0)[:, 0, :], data.unsqueeze(0)[:, 1, :])
+                pos_loss = self.score_fn(data.unsqueeze(0)[:, 2, :], predicted_tail) # 1
                 # logger.info(pos_loss)
                 target += [1] * pos_loss.shape[0]
-                neg_loss = self.score_fn(data['neg'].squeeze(1), predicted_tail) # 
+                neg_loss = self.score_fn(self.all_ents_embs.squeeze(1), predicted_tail) # 
+                # neg_loss = torch.mean(neg_loss).unsqueeze(0)
                 # logger.info(neg_loss)
                 target += [0] * neg_loss.shape[0]
                 
@@ -165,7 +177,12 @@ class Trainer:
             # BCE loss
             batch_loss = torch.cat((pos_losses, neg_losses))
             loss = self.loss(batch_loss, torch.tensor(target, dtype=torch.float).cuda())
+            # loss = (pos_losses.mean() + neg_losses.mean())/2
+            y = torch.Tensor([-1])
+            if self.args.use_cuda:
+                y = y.cuda()
 
+            # loss = torch.mean(self.loss(y * pos_losses) + self.loss(neg_losses))
             logger.info('Positive loss: {}'.format(pos_losses.mean()))
             logger.info('Negative loss: {}'.format(neg_losses.mean()))
             logger.info('All loss: {}'.format(loss))
